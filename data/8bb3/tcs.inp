@@ -1,0 +1,31 @@
+#protcs to sample ternary complexes
+PROTACs: protac.sdf
+
+#anchoring warhead in SDF with 3D defined from an X-ray or docking
+Warhead_anchor: e3.sdf
+
+#flexible warhead in SDF with 3D defined from an X-ray or docking
+Warhead_flex: poi.sdf
+
+#anchoring protein
+Protein_anchor: e3.pdb
+
+#flexible protein
+Protein_flex: poi.pdb
+
+#output the sampled PROTAC conformations
+Output_protac: TC_protac.sdf
+
+#output the sampled orientations of the protein to be aligned
+Output_protein: TC_protein.pdb
+
+#interaction interface on the anchoring protein, namely binding pocket defined as xmin, xmax, ymin, ymax, zmin, zmax
+Interface: -30.0, -4.0, -2.0, 26.0, 0.0, 37.0
+
+#parameters for sampling
+N_ini: 10000         #initital samples
+N_search: 1000       #deep search
+N_keep: 1000         #max to keep
+N_processes: 4       #paralell
+ 
+
