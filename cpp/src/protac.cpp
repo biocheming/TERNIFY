@@ -32,7 +32,8 @@ void Protac::init(RDKit::ROMol* protac,
                  const std::string& fpro_flex,
                  int processes,
                  const GRID& grid_anchor,
-                 const GRID& grid_flex) {
+                 const GRID& grid_flex,
+                 bool verbose) {
     
     processes_ = processes;
     grid_anchor_ = grid_anchor;
@@ -84,6 +85,12 @@ void Protac::init(RDKit::ROMol* protac,
         throw std::runtime_error("No match found for the flexible warhead.");
     }
     RDKit::MatchVectType match_01 = matches_01[0];
+    
+    // 保存弹头原子索引用于RMSD计算
+    warhead_atoms_.clear();
+    for (const auto& pair : match_01) {
+        warhead_atoms_.push_back(pair.second);  // 保存protac中弹头原子的索引
+    }
     
     // 查找连接点
     int cp_01 = -1;
@@ -153,12 +160,12 @@ void Protac::init(RDKit::ROMol* protac,
     conf_protac = protac_->getConformer();
     std::cout << "Finding acceptors..." << std::endl;
     // 识别氢键受体
-    RDKit::ROMol* acceptor_patt = RDKit::SmartsToMol(
+    std::unique_ptr<RDKit::ROMol> acceptor_patt(RDKit::SmartsToMol(
         "[$([O;H1;v2]),"
         "$([O;H0;v2;!$(O=N-*),$([O;-;!$(*-N=O)]),$([o;+0])]),"
         "$([n;+0;!X3;!$([n;H1](cc)cc),$([$([N;H0]#[C&v4])]),$([N&v3;H0;$(Nc)])]),"
         "$([F;$(F-[#6]);!$(FC[F,Cl,Br,I])])]"
-    );
+    ));
     std::vector<int> hb_acceptors;
     std::vector<RDKit::MatchVectType> hb_acc_matches;
     RDKit::SubstructMatch(*protac_, *acceptor_patt, hb_acc_matches);
@@ -167,15 +174,15 @@ void Protac::init(RDKit::ROMol* protac,
             hb_acceptors.push_back(pair.second);
         }
     }
-    delete acceptor_patt;
+
     std::cout << "Finding donors..." << std::endl;
     // 识别氢键供体
-    RDKit::ROMol* donor_patt = RDKit::SmartsToMol(
+    std::unique_ptr<RDKit::ROMol> donor_patt(RDKit::SmartsToMol(
         "[$([N&!H0&v3,N&!H0&+1&v4,n&H1&+0,$([$([Nv3](-C)(-C)-C)]),"
         "$([$(n[n;H1]),$(nc[n;H1])])]),"
         "$([NX3,NX2]([!O,!S])!@C(!@[NX3,NX2]([!O,!S]))!@[NX3,NX2]([!O,!S])),"
         "$([O,S;H1;+0])]"
-    );
+    ));
     std::vector<int> hb_donors;
     std::vector<RDKit::MatchVectType> hb_don_matches;
     RDKit::SubstructMatch(*protac_, *donor_patt, hb_don_matches);
@@ -184,7 +191,6 @@ void Protac::init(RDKit::ROMol* protac,
             hb_donors.push_back(pair.second);
         }
     }
-    delete donor_patt;    
 
     // 计算不在match_01中的原子的电荷
     std::vector<int> match_01_indices;
@@ -416,7 +422,7 @@ void Protac::init(RDKit::ROMol* protac,
     }                   
     // 调用list函数处理warheads和rbond
     std::cout << "Processing FF parameters..." << std::endl;
-    list(warheads, rbond, false);
+    list(warheads, rbond, verbose);
     // 计算参考内部能量
     E_intra_ref_ = e_intra(protac_.get());
     protac_ = MinimizeH(*protac_);
@@ -509,26 +515,25 @@ void Protac::list(const std::vector<int>& warheads, const std::vector<std::pair<
         throw std::runtime_error("Failed to setup MMFF properties");
     }
 
-    // 计算van der Waals对
-    RDKit::ROMOL_SPTR distMatMol(new RDKit::ROMol(*protac_));
-    const double* dmat_ptr = RDKit::MolOps::get3DDistanceMat(*distMatMol);
+    // 获取拓扑距离矩阵，而不是3D距离矩阵
+    const double* topDistMat = RDKit::MolOps::getDistanceMat(*protac_);
     
     size_t n = protac_->getNumAtoms();
-    std::vector<std::vector<double>> dmat(n, std::vector<double>(n));  // 创建一个二维向量来存储距离矩阵
+    std::vector<std::vector<double>> topDist(n, std::vector<double>(n));  // 创建一个二维向量来存储拓扑距离矩阵
 
     // 将指针中的数据复制到二维向量中
     for (size_t i = 0; i < n; ++i) {
         for (size_t j = 0; j < n; ++j) {
-            dmat[i][j] = dmat_ptr[i * n + j];  // 计算索引并赋值
+            topDist[i][j] = topDistMat[i * n + j];  // 计算索引并赋值
         }
     }
 
-    // 打印距离矩阵（可选）
+    // 打印拓扑距离矩阵（可选）
     if(print_info){
-        std::cout << "Distance matrix (first 5x5):" << std::endl;
+        std::cout << "Topological distance matrix (first 5x5):" << std::endl;
         for (size_t i = 0; i < std::min(n, size_t(5)); ++i) {
             for (size_t j = 0; j < std::min(n, size_t(5)); ++j) {
-                std::cout << dmat[i][j] << "\t";
+                std::cout << topDist[i][j] << "\t";
             }
             std::cout << std::endl;
         }
@@ -536,8 +541,9 @@ void Protac::list(const std::vector<int>& warheads, const std::vector<std::pair<
 
     // 计算 VdW 参数
     for (size_t i = 0; i < n; ++i) {
-        for (size_t j = i; j < n; ++j) {
-            if (dmat[i][j] > 2.0) {  // 如果距离大于2.0
+        for (size_t j = i+1; j < n; ++j) {
+            // 只考虑拓扑距离 >= 3 的原子对（非共价相互作用）
+            if (topDist[i][j] > 2.0) {  
                 // 如果两个原子都在wh_h中，跳过
                 if (wh_h.find(i) != wh_h.end() && wh_h.find(j) != wh_h.end()) {
                     continue;
@@ -549,32 +555,6 @@ void Protac::list(const std::vector<int>& warheads, const std::vector<std::pair<
                     continue;
                 }
                 
-                // 检查是否是1-3原子对
-                bool is_angle_pair = false;
-                const RDKit::Atom* atom_i = protac_->getAtomWithIdx(i);
-            
-                // 遍历i的邻接原子
-                for (const auto& neighbor : protac_->atomNeighbors(atom_i)) {
-                    // 如果j也是这个邻接原子的邻接原子，说明i-k-j构成一个角度
-                    if (protac_->getBondBetweenAtoms(neighbor->getIdx(), j)) {
-                        is_angle_pair = true;
-                        break;
-                    }
-                }
-                if (is_angle_pair) continue;         
-                mmffProps.getMMFFVdWParams(i, j, vdwParams);
-                
-                // 打印VdW参数
-                if (print_info) {
-                    // 打印原子类型
-                    std::cout << "Atom pair " << i+1 << "-" << j+1 << ":\n"
-                              << "  Atom types: " << static_cast<int>(mmffProps.getMMFFAtomType(i)) 
-                              << "-" << static_cast<int>(mmffProps.getMMFFAtomType(j)) << "\n"
-                              << "  R_ij_star: " << vdwParams.R_ij_star << "\n"
-                              << "  R_ij_starUnscaled: " << vdwParams.R_ij_starUnscaled << "\n"
-                              << "  epsilon: " << vdwParams.epsilon << "\n"
-                              << "  epsilonUnscaled: " << vdwParams.epsilonUnscaled << std::endl;
-                }
                 // 创建VdW参数列表
                 VdwParam param;
                 param.atom1_idx = i;
@@ -586,6 +566,24 @@ void Protac::list(const std::vector<int>& warheads, const std::vector<std::pair<
                 double r_ij_star_pow7 = std::pow(vdwParams.R_ij_star, 7);  // 先计算7次方
                 param.param4 = 1.12 * r_ij_star_pow7;  // 再乘以系数
                 param.param5 = 0.12 * r_ij_star_pow7;  // 再乘以系数
+                
+                // 对拓扑距离=3的1-4连接键进行能量缩放（一般是0.75）
+                if (std::abs(topDist[i][j] - 3.0) < 0.001) {  // 使用浮点比较
+                    param.param1 *= 0.75;  // 对epsilon进行缩放
+                }
+                
+                // 打印VdW参数
+                if (print_info) {
+                    // 打印原子类型和拓扑距离
+                    std::cout << "Atom pair " << i+1 << "-" << j+1 << ":\n"
+                              << "  Atom types: " << static_cast<int>(mmffProps.getMMFFAtomType(i)) 
+                              << "-" << static_cast<int>(mmffProps.getMMFFAtomType(j)) << "\n"
+                              << "  Topological distance: " << topDist[i][j] << "\n"
+                              << "  R_ij_star: " << vdwParams.R_ij_star << "\n"
+                              << "  epsilon: " << param.param1 << 
+                              (std::abs(topDist[i][j] - 3.0) < 0.001 ? " (scaled by 0.75)" : "") << std::endl;
+                }
+                
                 list_vdw_.push_back(param);
             }
         }
@@ -655,10 +653,66 @@ void Protac::list(const std::vector<int>& warheads, const std::vector<std::pair<
 }
 
 
+// 计算两个构象之间的RMSD，只考虑弹头原子
+double Protac::computeRMSD(const RDKit::ROMol& mol, int confId1, int confId2) {
+    // 获取两个构象
+    const RDKit::Conformer& conf1 = mol.getConformer(confId1);
+    const RDKit::Conformer& conf2 = mol.getConformer(confId2);
+    
+    // 只计算弹头原子的RMSD
+    double sum_squared_dist = 0.0;
+    int count = 0;
+    
+    for (int atom_idx : warhead_atoms_) {
+        if (atom_idx < static_cast<int>(mol.getNumAtoms())) {
+            const RDGeom::Point3D& pos1 = conf1.getAtomPos(atom_idx);
+            const RDGeom::Point3D& pos2 = conf2.getAtomPos(atom_idx);
+            
+            double dx = pos1.x - pos2.x;
+            double dy = pos1.y - pos2.y;
+            double dz = pos1.z - pos2.z;
+            
+            sum_squared_dist += dx*dx + dy*dy + dz*dz;
+            count++;
+        }
+    }
+    
+    if (count == 0) {
+        return 0.0;  // 避免除零错误
+    }
+    
+    return std::sqrt(sum_squared_dist / count);
+}
+
+// 聚类构象
+std::vector<std::vector<int>> Protac::clusterConformers(const RDKit::ROMol& mol, double rmsdThreshold) {
+    std::vector<std::vector<int>> clusters;
+    unsigned int numConfs = mol.getNumConformers();
+    std::vector<bool> assigned(numConfs, false);
+
+    for (unsigned int i = 0; i < numConfs; ++i) {
+        if (assigned[i]) continue;
+        std::vector<int> cluster;
+        cluster.push_back(i);
+        assigned[i] = true;
+        for (unsigned int j = i + 1; j < numConfs; ++j) {
+            if (assigned[j]) continue;
+            double rmsd = computeRMSD(mol, i, j);
+            if (rmsd < rmsdThreshold) {
+                cluster.push_back(j);
+                assigned[j] = true;
+            }
+        }
+        clusters.push_back(cluster);
+    }
+    return clusters;
+}
+
 void Protac::output(RDKit::SDWriter& w, 
                    std::ostream& fpro, 
                    int nKeep,
-                   bool fpro_w) {
+                   bool fpro_w, 
+                   double rmsd_cutoff) {
     try {
         // 按能量排序
         std::sort(solutions_.begin(), solutions_.end(),
@@ -666,9 +720,91 @@ void Protac::output(RDKit::SDWriter& w,
                       return a.energy < b.energy;
                   });
         
-        // 输出前nKeep个解
-        for (int i = 0; i < nKeep && i < static_cast<int>(solutions_.size()); ++i) {
+        // 创建一个临时分子来保存所有的构象
+        std::unique_ptr<RDKit::RWMol> multi_conf_mol(new RDKit::RWMol(*protac_));
+        std::vector<std::pair<int, size_t>> conf_to_solution; // 保存每个构象对应的solution索引
+        
+        // 创建所有构象
+        for (size_t i = 0; i < solutions_.size(); ++i) {
             const auto& solution = solutions_[i];
+            
+            // 规范化二面角值到[-180, 180]范围
+            std::vector<double> normalized_dihedrals;
+            for (double angle : solution.dihedrals) {
+                normalized_dihedrals.push_back(normalize_angle(angle));
+            }
+            
+            // 创建新构象
+            RDKit::Conformer conf(multi_conf_mol->getConformer());
+            conf.setId(i);  // 设置构象ID为solution索引
+            
+            // 设置二面角
+            bool valid_conformation = true;
+            for (size_t j = 0; j < rot_dihe_.size(); ++j) {
+                try {
+                    const auto& dihe_j = rot_dihe_[j];
+                    MolTransforms::setDihedralDeg(conf,
+                                                       dihe_j[0],
+                                                       dihe_j[1],
+                                                       dihe_j[2],
+                                                       dihe_j[3],
+                                                       normalized_dihedrals[j]);
+                } catch (const std::exception& e) {
+                    valid_conformation = false;
+                    break;
+                }
+            }
+            
+            // 验证构象中的原子距离是否合理
+            if (valid_conformation) {
+                multi_conf_mol->addConformer(new RDKit::Conformer(conf), true);
+                conf_to_solution.push_back(std::make_pair(conf.getId(), i));
+            }
+        }
+        
+        // 聚类构象
+        std::vector<std::vector<int>> clusters = clusterConformers(*multi_conf_mol, rmsd_cutoff);
+        
+        // 从每个集群选择能量最低的构象
+        std::vector<size_t> representative_solutions;
+        for (const auto& cluster : clusters) {
+            if (cluster.empty()) continue;
+            
+            // 在当前集群中找到能量最低的构象
+            int best_conf_id = cluster[0];
+            double best_energy = std::numeric_limits<double>::max();
+            for (int conf_id : cluster) {
+                auto it = std::find_if(conf_to_solution.begin(), conf_to_solution.end(),
+                                      [conf_id](const auto& p) { return p.first == conf_id; });
+                if (it != conf_to_solution.end()) {
+                    size_t solution_idx = it->second;
+                    if (solution_idx < solutions_.size() && solutions_[solution_idx].energy < best_energy) {
+                        best_energy = solutions_[solution_idx].energy;
+                        best_conf_id = conf_id;
+                    }
+                }
+            }
+            
+            // 添加到代表构象列表
+            auto it = std::find_if(conf_to_solution.begin(), conf_to_solution.end(),
+                                  [best_conf_id](const auto& p) { return p.first == best_conf_id; });
+            if (it != conf_to_solution.end()) {
+                representative_solutions.push_back(it->second);
+            }
+        }
+        
+        // 按能量重新排序代表构象
+        std::sort(representative_solutions.begin(), representative_solutions.end(),
+                 [this](size_t i, size_t j) {
+                     return solutions_[i].energy < solutions_[j].energy;
+                 });
+        
+        // 输出前nKeep个代表构象
+        int output_count = 0;
+        for (size_t rep_idx : representative_solutions) {
+            if (output_count >= nKeep) break;
+            
+            const auto& solution = solutions_[rep_idx];
             
             // 创建分子的副本进行操作
             std::unique_ptr<RDKit::ROMol> protac_copy(new RDKit::ROMol(*protac_));
@@ -679,106 +815,16 @@ void Protac::output(RDKit::SDWriter& w,
             for (double angle : solution.dihedrals) {
                 normalized_dihedrals.push_back(normalize_angle(angle));
             }
-            thread_safe_score(normalized_dihedrals, true);
-            // 设置二面角并验证
-            bool valid_conformation = true;
+            
+            // 设置二面角
             for (size_t j = 0; j < rot_dihe_.size(); ++j) {
-                try {
-                    const auto& dihe_j = rot_dihe_[j];
-                    RDKit::Atom* a1 = protac_copy->getAtomWithIdx(dihe_j[0]);
-                    RDKit::Atom* a2 = protac_copy->getAtomWithIdx(dihe_j[1]);
-                    RDKit::Atom* a3 = protac_copy->getAtomWithIdx(dihe_j[2]);
-                    RDKit::Atom* a4 = protac_copy->getAtomWithIdx(dihe_j[3]);
-                    // 先检查原子位置
-                    const RDGeom::Point3D& pos0 = conf.getAtomPos(dihe_j[0]);
-                    const RDGeom::Point3D& pos1 = conf.getAtomPos(dihe_j[1]);
-                    const RDGeom::Point3D& pos2 = conf.getAtomPos(dihe_j[2]);
-                    const RDGeom::Point3D& pos3 = conf.getAtomPos(dihe_j[3]);
-                    
-                    // 检查原子间距
-                    double dist01 = (pos0 - pos1).length();
-                    double dist12 = (pos1 - pos2).length();
-                    double dist23 = (pos2 - pos3).length();
-                    
-                    // 添加合理的距离限制（例如：0.5 Å 到 3.0 Å）
-                    const double MIN_DIST = 0.5;  // Å
-                    const double MAX_DIST = 3.0;  // Å
-                    
-                    if (dist01 < MIN_DIST || dist01 > MAX_DIST ||
-                        dist12 < MIN_DIST || dist12 > MAX_DIST ||
-                        dist23 < MIN_DIST || dist23 > MAX_DIST) {
-                        std::cerr << "Warning: Invalid bond distances in dihedral " << j 
-                                << " [" << dihe_j[0] << "(" << a1->getSymbol() << ")-"
-                                << dihe_j[1] << "(" << a2->getSymbol() << ")-"
-                                << dihe_j[2] << "(" << a3->getSymbol() << ")-"
-                                << dihe_j[3] << "(" << a4->getSymbol() << ")] "
-                                << "DIST: " << dist01 << " " << dist12 << " " << dist23 
-                                << " DIHE: " << solution.dihedrals[j] << std::endl;
-                        valid_conformation = false;
-                        break;
-                    }
-                    
-                    // 设置二面角
-                    MolTransforms::setDihedralDeg(conf,
-                                                dihe_j[0],
-                                                dihe_j[1],
-                                                dihe_j[2],
-                                                dihe_j[3],
-                                                normalized_dihedrals[j]);
-                    
-                    // 验证设置后的二面角
-                    double actual_dihedral = MolTransforms::getDihedralDeg(conf,
-                                                                            dihe_j[0],
-                                                                            dihe_j[1],
-                                                                            dihe_j[2],
-                                                                            dihe_j[3]);
-                        // 处理边界情况：-180度和180度是等价的
-                        double diff = std::abs(actual_dihedral - normalized_dihedrals[j]);
-                        if (diff > 180.0) {
-                            diff = 360.0 - diff;  // 处理周期性
-                        }
-                        if (std::abs(diff) > 1.0) {
-                            std::cerr << "Warning: Failed to set dihedral " << j 
-                                 << " (expected: " << normalized_dihedrals[j]
-                                 << ", got: " << actual_dihedral << ")" << std::endl;
-                        valid_conformation = false;
-                        break;
-                    }
-                    
-                } catch (const std::exception& e) {
-                    std::cerr << "Error setting dihedral " << j << ": " << e.what() << std::endl;
-                    valid_conformation = false;
-                    break;
-                }
-            }
-            
-            if (!valid_conformation) {
-                std::cout << "Skipping invalid conformation at solution " << i << std::endl;
-                continue;
-            }
-            
-            // 验证分子构象
-            for (size_t k = 0; k < protac_copy->getNumAtoms(); ++k) {
-                const RDGeom::Point3D& pos_k = conf.getAtomPos(k);
-                for (size_t l = k + 1; l < protac_copy->getNumAtoms(); ++l) {
-                    const RDGeom::Point3D& pos_l = conf.getAtomPos(l);
-                    double dist = (pos_k - pos_l).length();
-                    if (dist < 1e-6) {
-                        std::cerr << "Overlapping atoms detected in molecule:\n"
-                                 << "Atom " << k << " (" << protac_copy->getAtomWithIdx(k)->getSymbol() 
-                                 << ") at (" << pos_k.x << ", " << pos_k.y << ", " << pos_k.z << ")\n"
-                                 << "Atom " << l << " (" << protac_copy->getAtomWithIdx(l)->getSymbol() 
-                                 << ") at (" << pos_l.x << ", " << pos_l.y << ", " << pos_l.z << ")\n";
-                        valid_conformation = false;
-                        break;
-                    }
-                }
-                if (!valid_conformation) break;
-            }
-            
-            if (!valid_conformation) {
-                std::cout << "Skipping solution " << i << " due to overlapping atoms" << std::endl;
-                continue;
+                const auto& dihe_j = rot_dihe_[j];
+                MolTransforms::setDihedralDeg(conf,
+                                                  dihe_j[0],
+                                                  dihe_j[1],
+                                                  dihe_j[2],
+                                                  dihe_j[3],
+                                                  normalized_dihedrals[j]);
             }
             
             // 写入分子
@@ -802,10 +848,10 @@ void Protac::output(RDKit::SDWriter& w,
                 ref.push_back({pos.x, pos.y, pos.z});
             }
             
-            // 对齐蛋白质坐标，coord_subs_var为w_flex转移到原点的原子坐标
+            // 对齐蛋白质坐标
             try {
                 Coords coords_pro = Align(protein_.coords, coord_subs_var, ref);
-                fpro << "MODEL" << std::setw(9) << (i + 1) << "\n";
+                fpro << "MODEL" << std::setw(9) << (output_count + 1) << "\n";
                 fpro << "REMARK   1 SCORE " << std::fixed << std::setprecision(3) 
                      << solution.energy << "\n";
                 size_t atom_index = 0;
@@ -831,6 +877,8 @@ void Protac::output(RDKit::SDWriter& w,
                 std::cerr << "Error in protein alignment: " << e.what() << std::endl;
                 continue;
             }
+            
+            output_count++;
         }
         
     } catch (const std::exception& e) {
@@ -839,26 +887,28 @@ void Protac::output(RDKit::SDWriter& w,
     }
 }
 
-Protac::Solution Protac::sample_single() {
+Protac::Solution Protac::sample_single(bool verbose) {
     std::vector<double> dihe(rot_dihe_.size());
     static std::mt19937 gen(std::random_device{}());
-    // 这里是我着重要改的地方，希望初始构象尽量在低能量区域
-    //std::uniform_real_distribution<double> dist(-179.99, 179.99);
-    //for (size_t i = 0; i < rot_dihe_.size(); ++i) {
-    //    dihe[i] = dist(gen);
-    //}    
+    
+    // Create a copy of the protac molecule once
+    RDKit::ROMol mol_copy(*protac_);
+    
     std::uniform_int_distribution<int> dist(0, 35);
     for (size_t i = 0; i < rot_dihe_.size(); ++i) {
         dihe[i] = list_dihe_[i].lowEnerDiheAngles[dist(gen)];
     }
 
-    double ener = thread_safe_score(dihe);
+    // Pass the copy to thread_safe_score with verbose parameter
+    double ener = thread_safe_score(dihe, &mol_copy, verbose);
     return Solution{dihe, ener, std::vector<double>{}};
 }
 
-void Protac::sample(int ntotal, int nsolu) {
+void Protac::sample(int ntotal, int nsolu, bool verbose) {
     // 创建任务vector
-    std::cout << "Ntotal: " << ntotal << std::endl;
+    if (verbose) {
+        std::cout << "Ntotal: " << ntotal << std::endl;
+    }
     std::vector<std::future<Solution>> futures;
     futures.reserve(ntotal);
     
@@ -870,9 +920,10 @@ void Protac::sample(int ntotal, int nsolu) {
     std::mutex mutex;
     std::vector<Solution> solutions;
     int tasks_remaining = ntotal;
+    int tasks_completed = 0;
     
-    // 线程工作函数
-    auto worker = [this, &mutex, &solutions, &tasks_remaining]() {
+    // 线程工作函数 - 移除进度条相关代码
+    auto worker = [this, &mutex, &solutions, &tasks_remaining, &tasks_completed, verbose]() {
         while (true) {
             // 检查是否还有任务
             {
@@ -884,12 +935,13 @@ void Protac::sample(int ntotal, int nsolu) {
             }
             
             // 执行采样
-            Solution result = sample_single();
+            Solution result = sample_single(verbose);
             
             // 保存结果
             {
                 std::lock_guard<std::mutex> lock(mutex);
                 solutions.push_back(result);
+                ++tasks_completed;
             }
         }
     };
@@ -917,18 +969,17 @@ void Protac::sample(int ntotal, int nsolu) {
     );
     
     // 执行搜索优化
-    search();
+    search(verbose);
 }
 
-Protac::Solution Protac::powell_minimize(const std::vector<double>& initial_guess, double tol) {
+Protac::Solution Protac::powell_minimize(const std::vector<double>& initial_guess, RDKit::ROMol* mol_copy, double tol) {
     // 规范化初始猜测值
     std::vector<double> normalized_guess = initial_guess;
     for (double& angle : normalized_guess) {
         angle = normalize_angle(angle);
     }
     
-    // 第一处修改
-    Solution current{normalized_guess, thread_safe_score(normalized_guess), std::vector<double>{}};
+    Solution current{normalized_guess, thread_safe_score(normalized_guess, mol_copy), std::vector<double>{}};
     const int max_iter = 100;
     const int n = initial_guess.size();
     
@@ -957,9 +1008,8 @@ Protac::Solution Protac::powell_minimize(const std::vector<double>& initial_gues
                         for (double& angle : guess1) angle = normalize_angle(angle);
                         for (double& angle : guess2) angle = normalize_angle(angle);
                         
-                        // 第二和第三处修改
-                        double energy1 = thread_safe_score(guess1);
-                        double energy2 = thread_safe_score(guess2);
+                        double energy1 = thread_safe_score(guess1, mol_copy);
+                        double energy2 = thread_safe_score(guess2, mol_copy);
 
                         if (energy1 < energy2) {
                             b = normalize_angle(x2);
@@ -1002,6 +1052,9 @@ Protac::Solution Protac::powell_minimize(const std::vector<double>& initial_gues
 }
 
 Protac::Solution Protac::search_single(const Solution& initial_solution) {
+    // Create a copy of the protac molecule once for this search
+    RDKit::ROMol mol_copy(*protac_);
+    
     // 第一阶段参数
     std::vector<double> temperatures = {60.0, 50.0, 40.0, 30.0, 20.0};
     double alpha = 1.1;
@@ -1011,7 +1064,7 @@ Protac::Solution Protac::search_single(const Solution& initial_solution) {
     for (double T : temperatures) {
         alpha *= 0.9;
         // Powell最小化
-        Solution minimized = powell_minimize(best.dihedrals, 0.01);
+        Solution minimized = powell_minimize(best.dihedrals, &mol_copy, 0.01);
         if (minimized.energy < best.energy) {
             best = minimized;
         }
@@ -1034,7 +1087,7 @@ Protac::Solution Protac::search_single(const Solution& initial_solution) {
             }
             
             // 计算能量
-            double score = this->thread_safe_score(current);
+            double score = this->thread_safe_score(current, &mol_copy);
             // Metropolis准则
             if (score < prev.energy) {
                 prev = Solution{current, score, std::vector<double>{}};
@@ -1052,7 +1105,7 @@ Protac::Solution Protac::search_single(const Solution& initial_solution) {
     
     // 第二阶段：低温精细搜索
     {
-        Solution minimized = powell_minimize(best.dihedrals, 0.01);
+        Solution minimized = powell_minimize(best.dihedrals, &mol_copy, 0.01);
         if (minimized.energy < best.energy) {
             best = minimized;
         }
@@ -1072,11 +1125,11 @@ Protac::Solution Protac::search_single(const Solution& initial_solution) {
             // 计算新构象
             std::vector<double> current = prev.dihedrals;
             for (size_t j = 0; j < current.size(); ++j) {
-                current[j] += delta[j]; // this diheral is will be normalized in the score function
+                current[j] += delta[j];
             }
             
             // 计算能量
-            double score = this->thread_safe_score(current);
+            double score = this->thread_safe_score(current, &mol_copy);
             // Metropolis准则
             if (score < prev.energy) {
                 prev = Solution{current, score, std::vector<double>{}};
@@ -1093,7 +1146,7 @@ Protac::Solution Protac::search_single(const Solution& initial_solution) {
     }
     
     // 最终优化
-    Solution final = powell_minimize(best.dihedrals, 0.01);
+    Solution final = powell_minimize(best.dihedrals, &mol_copy, 0.01);
     if (final.energy < best.energy) {
         best = final;
     }
@@ -1144,7 +1197,7 @@ auto ThreadPool::enqueue(F&& f) -> std::future<typename std::result_of<F()>::typ
 }
 
 // 在 Protac::search() 中使用 ThreadPool
-void Protac::search() {
+void Protac::search(bool verbose) {
     int num_threads = std::min(processes_, static_cast<int>(std::thread::hardware_concurrency()));
     ThreadPool pool(num_threads); // 使用 num_threads 创建线程池
     std::vector<std::future<Solution>> futures;
@@ -1157,16 +1210,24 @@ void Protac::search() {
         ));
     }
 
-    // 准备进度条
-    ProgressBar progressBar(futures.size());
+    // 准备进度条（仅在verbose模式下）
+    std::unique_ptr<ProgressBar> progress_bar;
+    if (verbose) {
+        progress_bar = std::make_unique<ProgressBar>(futures.size());
+    }
+    
     // 收集结果
     solutions_.clear();
     for (size_t i = 0; i < futures.size(); ++i) {
         solutions_.push_back(futures[i].get());
-        progressBar.update(i + 1); // 更新进度条，传递当前已完成的任务数
+        if (verbose && progress_bar) {
+            progress_bar->update(i + 1); // 更新进度条，传递当前已完成的任务数
+        }
     }
 
-    progressBar.finish(); // 结束进度条
+    if (verbose && progress_bar) {
+        progress_bar->finish(); // 结束进度条
+    }
 }
 
 double Protac::e_intra(const RDKit::ROMol* mol = nullptr) const {
@@ -1181,32 +1242,12 @@ double Protac::e_intra(const RDKit::ROMol* mol = nullptr) const {
         coors.push_back(conf.getAtomPos(i));
     }
     for (const auto& p : list_vdw_) {
-        //vdw potential MMFF94s
-        //param.atom1_idx = i;
-        //param.atom2_idx = j;
-        //param.param1 = vdwParams.epsilon;
-        //param.param1_1 = vdwParams.R_ij_star;
-        //param.param2 = 1.07 * vdwParams.R_ij_star;
-        //param.param3 = 0.07 * vdwParams.R_ij_star;
-        //double r_ij_star_pow7 = std::pow(vdwParams.R_ij_star, 7);  // 先计算7次方
-        //param.param4 = 1.12 * r_ij_star_pow7;  // 再乘以系数
-        //param.param5 = 0.12 * r_ij_star_pow7;  // 再乘以系数
-        
         double dist = (coors[p.atom1_idx] - coors[p.atom2_idx]).length();
         double term1 = p.param2 / (dist + p.param3);
         double term1_pow = std::pow(term1, 7);
         double term2 = p.param4 / (std::pow(dist, 7) + p.param5);
         double result = term1_pow * (term2 - 2.0);
         vdw += p.param1 * result;
-        /*
-        //vina potential
-        double dist = (coors[p.atom1_idx] - coors[p.atom2_idx]).length();
-        double rR02 = std::pow(dist - p.param1_1, 2);
-        double gauss = std::exp(-rR02/(0.125*p.param1_1 + 1.0e-5));
-        double clash = dist > p.param1_1 ? 0.0 : 6.0 * rR02 ;
-        double result = p.param1 * (-1.0*gauss + clash);
-        vdw += result;
-        */
     }
     double dihe = 0.0;
     for (const auto& d : list_dihe_) {
@@ -1228,10 +1269,9 @@ double Protac::e_intra(const RDKit::ROMol* mol = nullptr) const {
 
 
 
-double Protac::thread_safe_score(const std::vector<double>& dihe, bool print_info) {
-    // 每次都重新创建线程本地分子的副本
-    thread_local_mol_.reset(new RDKit::ROMol(*protac_));
-    RDKit::Conformer& conf = thread_local_mol_->getConformer();
+double Protac::thread_safe_score(const std::vector<double>& dihe, RDKit::ROMol* mol_copy, bool print_info) {
+    // Use the provided molecule copy instead of creating a new one
+    RDKit::Conformer& conf = mol_copy->getConformer();
     
     // 首先规范化所有二面角
     std::vector<double> normalized_dihe = dihe;
@@ -1253,14 +1293,14 @@ double Protac::thread_safe_score(const std::vector<double>& dihe, bool print_inf
 
     // 获取所有protac原子位置
     std::vector<RDGeom::Point3D> positions;
-    positions.reserve(thread_local_mol_->getNumAtoms());
-    for (size_t i = 0; i < thread_local_mol_->getNumAtoms(); ++i) {
+    positions.reserve(mol_copy->getNumAtoms());
+    for (size_t i = 0; i < mol_copy->getNumAtoms(); ++i) {
         positions.push_back(conf.getAtomPos(i));
     }
 
-    // 计算分子内能量 (需要修改e_intra()函数以接受分子指针参数)
-    double e_in = e_intra(thread_local_mol_.get()) - E_intra_ref_;
-    if (e_in > paras["ub_strain"]) {  // Use double quotes for string literal
+    // 计算分子内能量
+    double e_in = e_intra(mol_copy) - E_intra_ref_;
+    if (e_in > paras["ub_strain"]) {
         e_in = paras["ub_strain"];
     }
 
@@ -1301,13 +1341,15 @@ double Protac::thread_safe_score(const std::vector<double>& dihe, bool print_inf
     Coords aligned_coors = Align2(coors_anchor, ref, coord_subs_var, translation_);
     e_flex = GetGridEn(grid_flex_, aligned_coors, q_anchor_);
 
-    if (print_info) {
+    /* //print energy infomation or not 
+    if (print_info) { 
         std::cout << std::fixed << std::setprecision(2)
                   << "e_in: " << e_in 
                   << " e_anchor: " << e_anchor 
                   << " e_pp: " << e_pp 
                   << " e_flex: " << e_flex << std::endl;
     }
+    */
     return e_in + e_anchor + e_pp + e_flex;
 }
 
