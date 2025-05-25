@@ -1,5 +1,6 @@
 # TERNIFY: Efficient Sampling of PROTAC-Induced Ternary Complexes
 
+
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-2024.11.17-green.svg)]()
 
@@ -84,13 +85,42 @@ conda info --envs
 conda activate ternify
 
 # Build the project
+=======
+# create an env for ternify
+```
+conda create -n ternify python=3.12
+conda install mamba -c conda-forge
+
+mamba install rdkit=2025.03.2 -c conda-forge
+mamba install librdkit-dev=2025.03.2 -c conda-forge
+
+mamba install libboost-devel=1.86.0 -c conda-forge
+mamba install libboost-headers=1.86.0 -c conda-forge
+mamba install libboost-python-devel=1.86.0 -c conda-forge # may be not usable
+
+mamba install eigen=3.4.0 -c conda-forge
+conda install cmake -c conda-forge # make sure cmake > 3.0, the default cmake version is 4.0.2
+```
+
+# modify the rdkit and rdkit lib path in `CMakeLists.txt`
+
+link_directories(/opt/anaconda3/envs/ternify/lib)
+set(RDKIT_DIR "/opt/anaconda3/envs/ternify/")
+
+# compile ternify
+conda activate ternify
+
+
 mkdir build
 cd build 
 cmake ..
 make -j 8
 
+
 # Optional: Install globally
 sudo cp ternify /usr/local/bin
+=======
+# Run ternify
 ```
 
 ### Troubleshooting Installation
