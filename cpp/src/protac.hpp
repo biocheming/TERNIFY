@@ -45,18 +45,20 @@ public:
               const std::string& fpro_flex,
               int processes,
               const GRID& grid_anchor,
-              const GRID& grid_flex);
+              const GRID& grid_flex,
+              bool verbose = false);
     // 采样相关函数
-    Solution sample_single();
-    void sample(int ntotal = 100, int nsolu = 100);
-    void search();
+    Solution sample_single(bool verbose = false);
+    void sample(int ntotal = 100, int nsolu = 100, bool verbose = false);
+    void search(bool verbose = false);
     double e_intra(const RDKit::ROMol* mol) const;
     double score(const std::vector<double>& dihe);
     
     void output(RDKit::SDWriter& w, 
                 std::ostream& fpro, 
                 int nKeep,
-                bool fpro_w = false);
+                bool fpro_w = false,
+                double rmsd_cutoff = 1.0);
     void printProtacInfo();
 
 private:
@@ -78,6 +80,7 @@ private:
     std::vector<IQHb> q_flex_;
     std::vector<IQHb> q_anchor_;
     std::array<double, 3> translation_;
+    std::vector<int> warhead_atoms_;  // 存储弹头原子的索引，用于RMSD计算
     
     struct VdwParam {
         int atom1_idx;
@@ -116,14 +119,19 @@ private:
     std::uniform_real_distribution<double> uniform_dist_;
 
     // Powell最小化的辅助函数
-    Solution powell_minimize(const std::vector<double>& initial_guess, double tol = 0.01);
+    Solution powell_minimize(const std::vector<double>& initial_guess, RDKit::ROMol* mol_copy, double tol = 0.01);
     Solution search_single(const Solution& initial_solution);
 
     //
     thread_local static std::unique_ptr<RDKit::ROMol> thread_local_mol_;
-    double thread_safe_score(const std::vector<double>& dihe, bool print_info = false); // 只声明
+    double thread_safe_score(const std::vector<double>& dihe, RDKit::ROMol* mol_copy, bool print_info = false); // 只声明
 
     static std::mutex output_mutex_;
+
+    // Helper methods for conformer clustering
+    double computeRMSD(const RDKit::ROMol& mol, int confId1, int confId2);
+    std::vector<std::vector<int>> clusterConformers(const RDKit::ROMol& mol, double rmsdThreshold);
+    
 
 };
 

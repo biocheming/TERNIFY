@@ -12,10 +12,12 @@ struct Parameters {
     std::string protein_flex_file = "poi.pdb";
     std::string output_protac_file = "TC_protac.sdf";
     std::string output_protein_file = "TC_protein.pdb";
+    double output_rmsd_cutoff = 1.0;
     int n_ini = 10000;
     int n_search = 900;
     int n_keep = 900;
     int n_processes = 1;
+    int verbose = 0;
     VolRegion interface;
 };
 

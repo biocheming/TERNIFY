@@ -65,10 +65,12 @@ void read_parameters(const std::string& filename, Parameters& params) {
             else if (key == "Protein_flex") params.protein_flex_file = value;
             else if (key == "Output_protac") params.output_protac_file = value;
             else if (key == "Output_protein") params.output_protein_file = value;
+            else if (key == "RMSD_cutoff") params.output_rmsd_cutoff = std::stod(value);
             else if (key == "N_ini") params.n_ini = std::stoi(value);
             else if (key == "N_search") params.n_search = std::stoi(value);
             else if (key == "N_keep") params.n_keep = std::stoi(value);
             else if (key == "N_processes") params.n_processes = std::stoi(value);
+            else if (key == "Verbose") params.verbose = std::stoi(value);
         }
     }
 }
@@ -173,17 +175,20 @@ void run_ternify(const Parameters& params) {
             // Initialize Protac object with the current molecule and other parameters
             PROTac.init(mol.get(), w_anch.get(), w_flex.get(),
                     params.protein_flex_file, params.n_processes,
-                    grid_anchor, grid_flex);
+                    grid_anchor, grid_flex, params.verbose > 0);
 
-            // Print Protac information
-            //PROTac.printProtacInfo();
+            // Print Protac information based on verbose setting
+            if (params.verbose > 0) {
+                std::cout << "Verbose mode enabled (level: " << params.verbose << ")" << std::endl;
+                PROTac.printProtacInfo();
+            }
 
             std::cout << "Sampling and Searching..." << std::endl;
-            PROTac.sample(params.n_ini, params.n_search);
+            PROTac.sample(params.n_ini, params.n_search, params.verbose > 0);
         
             std::cout << "Writing output..." << std::endl;
             // Write the output to the specified writer
-            PROTac.output(protac_writer, protein_writer ? *protein_writer : std::cout, params.n_keep, write_protein);            
+            PROTac.output(protac_writer, protein_writer ? *protein_writer : std::cout, params.n_keep, write_protein, params.output_rmsd_cutoff);            
         } 
         else {
             std::cout << "Warning: Molecule " << protac_index + 1 << " is invalid or could not be read." << std::endl;
