@@ -26,10 +26,10 @@
 thread_local std::unique_ptr<RDKit::ROMol> Protac::thread_local_mol_;
 std::mutex Protac::output_mutex_;
 
-void Protac::init(RDKit::ROMol* protac,
-                 RDKit::ROMol* w_anch,
-                 RDKit::ROMol* w_flex,
-                 const std::string& fpro_flex,
+void Protac::init(RDKit::ROMol* protac,  // unaligned protac
+                 RDKit::ROMol* w_anch,   //E3 lig
+                 RDKit::ROMol* w_flex,   //POI lig
+                 const std::string& fpro_flex, // POI protein
                  int processes,
                  const GRID& grid_anchor,
                  const GRID& grid_flex,
@@ -43,7 +43,7 @@ void Protac::init(RDKit::ROMol* protac,
     rng_ = std::mt19937(std::random_device{}());
     angle_dist_ = std::uniform_real_distribution<double>(-180.0, 180.0);
     uniform_dist_ = std::uniform_real_distribution<double>(0.0, 1.0);
-    // 初始化分子
+    // 初始化分子, 将优化H的protac赋值给了Protac类中的protac_,也算是protac_的第1次优化，只优化H的内容
     protac_= MinimizeH(*protac);
     // 获取构象
     RDKit::Conformer& conf_protac = protac_->getConformer();        //protac whole part
@@ -155,8 +155,9 @@ void Protac::init(RDKit::ROMol* protac,
         conf_protac.setAtomPos(match_01[i].second, coor);
         idx_.push_back(match_01[i].second);
     }
+    //protac_的第2次优化，由于protac与POI的lig对齐，优化也固定POI的lig对应的部分
     std::cout << "Minimization first time with flexible warhead fixed" << std::endl;
-    optimizeWithFixedAtoms(*protac_, idx_);
+    optimizeWithFixedAtoms(*protac_, idx_); //protac_的第2次优化，由于protac与POI的lig对齐，优化也固定POI的lig对应的部分
     conf_protac = protac_->getConformer();
     std::cout << "Finding acceptors..." << std::endl;
     // 识别氢键受体
@@ -284,8 +285,10 @@ void Protac::init(RDKit::ROMol* protac,
         AnchMatchedIDInProtac.push_back(match_02[i].second);
     }
     // Minimization second time
+    //protac_的第3次优化，由于protac与E3的lig对齐，优化也固定E3的lig对应的部分
+    //搜索构象时候，protac中E3_lig部分是固定的，但对应的POI_lig部分的坐标自由的，但其相对构象不变
     std::cout << "Minimization: anchor fixed, flexible warhead dihedral constrained..." << std::endl;
-    MiniFixAtomTor(*protac_, AnchMatchedIDInProtac, idx_);
+    MiniFixAtomTor(*protac_, AnchMatchedIDInProtac, idx_); 
     conf_protac = protac_->getConformer();
     // 计算不在match_02中的原子的电荷
     std::vector<int> match_02_indices;
@@ -333,6 +336,21 @@ void Protac::init(RDKit::ROMol* protac,
         warheads.push_back(pair.second);
     }
     
+    // 扩展warheads，包括直连的氢原子
+    std::vector<int> complete_warheads = warheads;  // 先复制重原子列表
+    for (int warhead_atom : warheads) {
+        RDKit::Atom* atom = protac_->getAtomWithIdx(warhead_atom);
+        auto [nbrIdx, endNbrs] = protac_->getAtomNeighbors(atom);
+        while (nbrIdx != endNbrs) {
+            RDKit::Atom* neighbor = protac_->getAtomWithIdx(*nbrIdx);
+            if (neighbor->getAtomicNum() == 1) {  // 氢原子
+                complete_warheads.push_back(neighbor->getIdx());
+            }
+            ++nbrIdx;
+        }
+    }
+    warheads = complete_warheads;
+
     // 找出不在warheads中的原子
     for (size_t i = 0; i < protac_->getNumAtoms(); ++i) {
         if (std::find(warheads.begin(), warheads.end(), i) == warheads.end()) {
@@ -424,9 +442,18 @@ void Protac::init(RDKit::ROMol* protac,
     std::cout << "Processing FF parameters..." << std::endl;
     list(warheads, rbond, verbose);
     // 计算参考内部能量
-    E_intra_ref_ = e_intra(protac_.get());
     protac_ = MinimizeH(*protac_);
+    E_intra_ref_ = e_intra(protac_.get());
     std::cout << "E_intra_ref: " << E_intra_ref_ << std::endl;
+    // I want to check the linker atoms 
+    if(verbose > 0 ){
+        std::cout << "Linker atoms ( " << linker.size() << " ): ";
+        for (int atom_idx : linker) {
+            RDKit::Atom* atom_i = protac_->getAtomWithIdx(atom_idx);
+            std::cout << atom_idx - 1 << "-" << atom_i->getSymbol() << " ";
+        }
+        std::cout << std::endl;
+    }
     // 输出初始化后的分子构象到SDF文件
     RDKit::SDWriter writer("protac_initialized.sdf");
     writer.write(*protac_);
@@ -827,6 +854,10 @@ void Protac::output(RDKit::SDWriter& w,
                                                   normalized_dihedrals[j]);
             }
             
+            // 添加能量分数作为分子属性
+            protac_copy->setProp("SCORE", solution.energy);
+            protac_copy->setProp("RANK", output_count + 1);
+            
             // 写入分子
             try {
                 w.write(*protac_copy);
@@ -835,9 +866,13 @@ void Protac::output(RDKit::SDWriter& w,
                 continue;
             }
             
-            if (!fpro_w) continue;
+            // 如果不需要输出蛋白质，直接跳过蛋白质相关计算
+            if (!fpro_w) {
+                output_count++;
+                continue;
+            }
 
-            // 获取ref坐标
+            // 获取ref坐标（只在需要蛋白质输出时计算）
             Coords ref;
             for (int idx : idx_) {
                 if (idx >= static_cast<int>(protac_copy->getNumAtoms())) {

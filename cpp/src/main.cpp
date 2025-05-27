@@ -96,13 +96,16 @@ void run_ternify(const Parameters& params) {
     else {
         throw std::runtime_error("Failed to read warhead molecules");
     }
-    // 创建输出文件
-    RDKit::SDWriter protac_writer(params.output_protac_file);
-    std::unique_ptr<std::ofstream> protein_writer;
-    bool write_protein = params.output_protein_file != "None";
+    
+    // 检查是否需要输出蛋白质坐标
+    bool write_protein = !params.output_protein_file.empty() && 
+                        params.output_protein_file != "None" && 
+                        params.output_protein_file != "none";
     
     if (write_protein) {
-        protein_writer.reset(new std::ofstream(params.output_protein_file));
+        std::cout << "Protein output will be written to numbered files based on: " << params.output_protein_file << std::endl;
+    } else {
+        std::cout << "Protein output disabled (Output_protein = None or not specified)" << std::endl;
     }
 
     // 创建网格
@@ -163,6 +166,7 @@ void run_ternify(const Parameters& params) {
         mol = std::unique_ptr<RDKit::ROMol>(protacs_supplier[protac_index]);
         // Check if the molecule was successfully read and matches the substructure
         if (mol) {
+            std::cout << "\n=== Processing PROTAC molecule " << (protac_index + 1) << " of " << total_protacs << " ===" << std::endl;
             std::cout << "READ: Number of atoms in protac: " << mol->getNumAtoms() << std::endl;
             std::cout << "READ: Number of bonds in protac: " << mol->getNumBonds() << std::endl;
             if (RDKit::SubstructMatch(*mol, *w_anch).empty() || 
@@ -170,6 +174,50 @@ void run_ternify(const Parameters& params) {
                 std::cout << "WARNING: Skipping molecule " << protac_index + 1 << ": this protac does not match substructures with anch/flex." << std::endl;
                 continue;
             }
+            
+            // 为每个PROTAC分子创建带编号的输出文件
+            std::string numbered_protac_file;
+            std::string numbered_protein_file;
+            
+            if (total_protacs > 1) {
+                // 多个分子时添加编号
+                size_t dot_pos = params.output_protac_file.find_last_of('.');
+                if (dot_pos != std::string::npos) {
+                    numbered_protac_file = params.output_protac_file.substr(0, dot_pos) + 
+                                         "_" + std::to_string(protac_index + 1) + 
+                                         params.output_protac_file.substr(dot_pos);
+                } else {
+                    numbered_protac_file = params.output_protac_file + "_" + std::to_string(protac_index + 1);
+                }
+                
+                if (write_protein) {
+                    dot_pos = params.output_protein_file.find_last_of('.');
+                    if (dot_pos != std::string::npos) {
+                        numbered_protein_file = params.output_protein_file.substr(0, dot_pos) + 
+                                              "_" + std::to_string(protac_index + 1) + 
+                                              params.output_protein_file.substr(dot_pos);
+                    } else {
+                        numbered_protein_file = params.output_protein_file + "_" + std::to_string(protac_index + 1);
+                    }
+                }
+            } else {
+                // 单个分子时使用原始文件名
+                numbered_protac_file = params.output_protac_file;
+                numbered_protein_file = params.output_protein_file;
+            }
+            
+            // 创建输出文件
+            RDKit::SDWriter protac_writer(numbered_protac_file);
+            std::unique_ptr<std::ofstream> protein_writer;
+            
+            if (write_protein) {
+                protein_writer.reset(new std::ofstream(numbered_protein_file));
+                std::cout << "PROTAC output: " << numbered_protac_file << std::endl;
+                std::cout << "Protein output: " << numbered_protein_file << std::endl;
+            } else {
+                std::cout << "PROTAC output: " << numbered_protac_file << std::endl;
+            }
+            
             Protac PROTac;
             std::cout << "Initializing protac..." << std::endl;
             // Initialize Protac object with the current molecule and other parameters
@@ -215,7 +263,7 @@ int main(int argc, char* argv[]) {
         std::cout << "TERNIFY: Efficient Sampling of PROTAC-Induced Ternary Complexes\n"
                   << "Hongtao Zhao, PhD\n"
                   << "Ximing XU, PhD [C++ implementation]\n"
-                  << "Version: 2024-11-17" << std::endl;
+                  << "Version: 2025-05-27" << std::endl;
 
         // 读取参数并运行
         Parameters params;
