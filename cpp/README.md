@@ -1,7 +1,6 @@
 # TERNIFY: Efficient Sampling of PROTAC-Induced Ternary Complexes
 
-
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-2024.11.17-green.svg)]()
 
 TERNIFY is a high-performance C++ implementation for efficient sampling and prediction of PROTAC-induced ternary complex structures. It uses advanced molecular modeling techniques to predict how PROTAC molecules bring together E3 ligases and target proteins to form productive ternary complexes.
@@ -41,24 +40,22 @@ TERNIFY employs a sophisticated computational approach that combines:
 conda create -n ternify python=3.12
 conda activate ternify
 
-# Install mamba for faster package management
-conda install mamba -c conda-forge
 ```
 
 #### 2. Install Dependencies
 
 ```bash
 # Install RDKit and development libraries
-mamba install rdkit=2025.03.2 -c conda-forge
-mamba install librdkit-dev=2025.03.2 -c conda-forge
+conda install rdkit=2025.03.2 -c conda-forge
+conda install librdkit-dev=2025.03.2 -c conda-forge
 
 # Install Boost libraries
-mamba install libboost-devel=1.86.0 -c conda-forge
-mamba install libboost-headers=1.86.0 -c conda-forge
-mamba install libboost-python-devel=1.86.0 -c conda-forge  # may be optional
+conda install libboost-devel=1.86.0 -c conda-forge
+conda install libboost-headers=1.86.0 -c conda-forge
+conda install libboost-python-devel=1.86.0 -c conda-forge  # may be optional
 
 # Install Eigen and CMake
-mamba install eigen=3.4.0 -c conda-forge
+conda install eigen=3.4.0 -c conda-forge
 conda install cmake -c conda-forge  # ensures cmake >= 3.3, default is 4.0.2
 ```
 
@@ -80,28 +77,7 @@ conda info --envs
 
 #### 4. Compile TERNIFY
 
-```bash
-# Ensure ternify environment is activated
-conda activate ternify
-
-# Build the project
-=======
-# create an env for ternify
 ```
-conda create -n ternify python=3.12
-conda install mamba -c conda-forge
-
-mamba install rdkit=2025.03.2 -c conda-forge
-mamba install librdkit-dev=2025.03.2 -c conda-forge
-
-mamba install libboost-devel=1.86.0 -c conda-forge
-mamba install libboost-headers=1.86.0 -c conda-forge
-mamba install libboost-python-devel=1.86.0 -c conda-forge # may be not usable
-
-mamba install eigen=3.4.0 -c conda-forge
-conda install cmake -c conda-forge # make sure cmake > 3.0, the default cmake version is 4.0.2
-```
-
 # modify the rdkit and rdkit lib path in `CMakeLists.txt`
 
 link_directories(/opt/anaconda3/envs/ternify/lib)
@@ -112,7 +88,7 @@ conda activate ternify
 
 
 mkdir build
-cd build 
+cd build
 cmake ..
 make -j 8
 
@@ -276,7 +252,7 @@ ternify debug.inp
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
 
 ## Acknowledgments
 
