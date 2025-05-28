@@ -162,7 +162,7 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
     conf_protac = protac_->getConformer();
     std::cout << "Finding acceptors..." << std::endl;
     // 识别氢键受体
-    std::unique_ptr<RDKit::ROMol> acceptor_patt(RDKit::SmartsToMol("[#8, nX2, $(N#C)]"));
+    std::unique_ptr<RDKit::ROMol> acceptor_patt(RDKit::SmartsToMol("[#8,nX2,$(N#C);+0]"));
     std::vector<int> hb_acceptors;
     std::vector<RDKit::MatchVectType> hb_acc_matches;
     RDKit::SubstructMatch(*protac_, *acceptor_patt, hb_acc_matches);
