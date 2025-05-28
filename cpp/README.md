@@ -1,7 +1,7 @@
 # TERNIFY: Efficient Sampling of PROTAC-Induced Ternary Complexes
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2024.11.17-green.svg)]()
+[![Version](https://img.shields.io/badge/version-2025.05.28-green.svg)]()
 
 TERNIFY is a high-performance C++ implementation for efficient sampling and prediction of PROTAC-induced ternary complex structures. It uses advanced molecular modeling techniques to predict how PROTAC molecules bring together E3 ligases and target proteins to form productive ternary complexes.
 
@@ -123,7 +123,7 @@ sudo cp ternify /usr/local/bin
 ### Basic Usage
 
 ```bash
-ternify tcs.inp
+ternify -p tcs.inp
 ```
 
 ### Input File Format
