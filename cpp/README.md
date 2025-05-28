@@ -204,7 +204,7 @@ TERNIFY calculates the following energy terms:
 - **E_flex**: PROTAC-flexible protein interaction
 - **E_pp**: Protein-protein interaction energy
 
-$$ Total Energy = E_intra + E_anchor + E_flex + E_pp $$
+$$ E_{total} = E_{intra} + E_{anchor} + E_{flex} + E_{pp} $$
 
 ## Performance Tips
 
