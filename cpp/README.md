@@ -199,10 +199,10 @@ Interface: -15.0, 15.0, -15.0, 15.0, -15.0, 15.0
 
 TERNIFY calculates the following energy terms:
 
-- ** $ E_{intra} $ **: Intramolecular PROTAC energy (VdW + torsional)
-- ** $ E_{anchor} $ **: PROTAC-anchor protein interaction
-- ** $ E_{flex} $ **: PROTAC-flexible protein interaction
-- ** $ E_{pp} $ **: Protein-protein interaction energy
+- $ E_{intra} $ : Intramolecular PROTAC energy (VdW + torsional)
+- $ E_{anchor} $ : PROTAC-anchor protein interaction
+- $ E_{flex} $ : PROTAC-flexible protein interaction
+- $ E_{pp} $ : Protein-protein interaction energy
 
 $$ E_{total} = E_{intra} + E_{anchor} + E_{flex} + E_{pp} $$
 
