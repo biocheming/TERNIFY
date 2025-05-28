@@ -5,48 +5,54 @@
 #include <vector>
 
 std::shared_ptr<RDKit::ROMol> MinimizeH(const RDKit::ROMol& input_mol) {
+    
+    // 添加氢原子并生成坐标
     std::shared_ptr<RDKit::ROMol> mol(RDKit::MolOps::addHs(input_mol, false, true));
-    RDKit::MolOps::addHs(*mol, false, true);    
-    RDKit::MMFF::MMFFMolProperties mmffProps(*mol, "MMFF94s", 0);
+    
+    // 创建MMFF力场
+    RDKit::MMFF::MMFFMolProperties mmffProps(*mol, "MMFF94s");
     if (!mmffProps.isValid()) {
         throw std::runtime_error("MMFF properties are invalid for this molecule.");
     }
+    
     // 关闭VDW和静电相互作用
     mmffProps.setMMFFVdWTerm(false);
     mmffProps.setMMFFEleTerm(false);
-    // 构建力场并应用固定点约束
+    
+    // 构建力场
     std::unique_ptr<ForceFields::ForceField> ff(
-        RDKit::MMFF::constructForceField(*mol, &mmffProps, 1e6, -1, true));
+        RDKit::MMFF::constructForceField(*mol, &mmffProps));
     
     if (!ff) {
         throw std::runtime_error("Failed to construct force field");
     }
-    // 对非氢原子添加位置约束
+    
+    // 对重原子添加位置约束（而不是完全固定）
     for (unsigned int i = 0; i < mol->getNumAtoms(); ++i) {
-        if (mol->getAtomWithIdx(i)->getAtomicNum() > 1) {  // 非氢原子
+        if (mol->getAtomWithIdx(i)->getAtomicNum() > 1) {
             ForceFields::ContribPtr pc(
                 new ForceFields::MMFF::PositionConstraintContrib(
-                    ff.get(), i, 0.0, 1.0e5));
+                    ff.get(), i, 0.0, 1.0e9));  // 适中的约束强度
             ff->contribs().push_back(pc);
         }
-    }    
-
-    // 执行力场优化
-    int maxIters = 10000;  // 设置最大迭代次数
-    ff->minimize(maxIters);
+    }
+    
+    // 最小化氢原子位置
+    ff->minimize(10000);
+    
     return mol;
 }
 
 void optimizeWithFixedAtoms(RDKit::ROMol& mol, const std::vector<int>& fixedAtoms) {
     // 初始化 MMFF 参数
-    RDKit::MMFF::MMFFMolProperties mmffProps(mol);
+    RDKit::MMFF::MMFFMolProperties mmffProps(mol, "MMFF94s");
     if (!mmffProps.isValid()) {
         std::cerr << "MMFF properties are invalid for this molecule." << std::endl;
         return;
     }
 
     std::unique_ptr<ForceFields::ForceField> ff(
-        RDKit::MMFF::constructForceField(mol, &mmffProps, 1e6, -1, true));
+        RDKit::MMFF::constructForceField(mol, &mmffProps, 1e9, -1, true));
     
     if (!ff) {
         std::cerr << "Failed to initialize MMFF force field." << std::endl;
@@ -83,9 +89,9 @@ void MiniFixAtomTor(RDKit::ROMol& mol,
     }
 
     // 创建力场
-    RDKit::MMFF::MMFFMolProperties mmffProps(mol);
+    RDKit::MMFF::MMFFMolProperties mmffProps(mol, "MMFF94s");
     std::unique_ptr<ForceFields::ForceField> ff(
-        RDKit::MMFF::constructForceField(mol, &mmffProps, 1e6, -1, true));
+        RDKit::MMFF::constructForceField(mol, &mmffProps, 1e9, -1, true));
     
     if (!ff) {
         throw std::runtime_error("Could not create MMFF94s force field");

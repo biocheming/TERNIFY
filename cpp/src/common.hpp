@@ -1,3 +1,6 @@
+#ifndef COMMON_HPP
+#define COMMON_HPP
+
 #include <array>
 #include <vector>
 #include <optional>
@@ -28,3 +31,5 @@ inline double normalize_angle(double angle) {
     while (angle < -180.0) angle += 360.0;
     return angle;
 }
+
+#endif // COMMON_HPP
