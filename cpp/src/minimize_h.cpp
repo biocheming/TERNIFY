@@ -10,7 +10,7 @@ std::shared_ptr<RDKit::ROMol> MinimizeH(const RDKit::ROMol& input_mol) {
     std::shared_ptr<RDKit::ROMol> mol(RDKit::MolOps::addHs(input_mol, false, true));
     
     // 创建MMFF力场
-    RDKit::MMFF::MMFFMolProperties mmffProps(*mol);
+    RDKit::MMFF::MMFFMolProperties mmffProps(*mol, "MMFF94s");
     if (!mmffProps.isValid()) {
         throw std::runtime_error("MMFF properties are invalid for this molecule.");
     }
@@ -32,7 +32,7 @@ std::shared_ptr<RDKit::ROMol> MinimizeH(const RDKit::ROMol& input_mol) {
         if (mol->getAtomWithIdx(i)->getAtomicNum() > 1) {
             ForceFields::ContribPtr pc(
                 new ForceFields::MMFF::PositionConstraintContrib(
-                    ff.get(), i, 0.0, 1.0e5));  // 适中的约束强度
+                    ff.get(), i, 0.0, 1.0e9));  // 适中的约束强度
             ff->contribs().push_back(pc);
         }
     }
@@ -45,14 +45,14 @@ std::shared_ptr<RDKit::ROMol> MinimizeH(const RDKit::ROMol& input_mol) {
 
 void optimizeWithFixedAtoms(RDKit::ROMol& mol, const std::vector<int>& fixedAtoms) {
     // 初始化 MMFF 参数
-    RDKit::MMFF::MMFFMolProperties mmffProps(mol);
+    RDKit::MMFF::MMFFMolProperties mmffProps(mol, "MMFF94s");
     if (!mmffProps.isValid()) {
         std::cerr << "MMFF properties are invalid for this molecule." << std::endl;
         return;
     }
 
     std::unique_ptr<ForceFields::ForceField> ff(
-        RDKit::MMFF::constructForceField(mol, &mmffProps, 1e6, -1, true));
+        RDKit::MMFF::constructForceField(mol, &mmffProps, 1e9, -1, true));
     
     if (!ff) {
         std::cerr << "Failed to initialize MMFF force field." << std::endl;
@@ -89,9 +89,9 @@ void MiniFixAtomTor(RDKit::ROMol& mol,
     }
 
     // 创建力场
-    RDKit::MMFF::MMFFMolProperties mmffProps(mol);
+    RDKit::MMFF::MMFFMolProperties mmffProps(mol, "MMFF94s");
     std::unique_ptr<ForceFields::ForceField> ff(
-        RDKit::MMFF::constructForceField(mol, &mmffProps, 1e6, -1, true));
+        RDKit::MMFF::constructForceField(mol, &mmffProps, 1e9, -1, true));
     
     if (!ff) {
         throw std::runtime_error("Could not create MMFF94s force field");

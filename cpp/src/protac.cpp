@@ -45,6 +45,7 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
     uniform_dist_ = std::uniform_real_distribution<double>(0.0, 1.0);
     // 初始化分子, 将优化H的protac赋值给了Protac类中的protac_,也算是protac_的第1次优化，只优化H的内容
     protac_= MinimizeH(*protac);
+    RDKit::RWMol protac_ini_H = *protac_ ;
     // 获取构象
     RDKit::Conformer& conf_protac = protac_->getConformer();        //protac whole part
     const RDKit::Conformer& conf_anch = w_anch->getConformer(); 
@@ -161,12 +162,7 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
     conf_protac = protac_->getConformer();
     std::cout << "Finding acceptors..." << std::endl;
     // 识别氢键受体
-    std::unique_ptr<RDKit::ROMol> acceptor_patt(RDKit::SmartsToMol(
-        "[$([O;H1;v2]),"
-        "$([O;H0;v2;!$(O=N-*),$([O;-;!$(*-N=O)]),$([o;+0])]),"
-        "$([n;+0;!X3;!$([n;H1](cc)cc),$([$([N;H0]#[C&v4])]),$([N&v3;H0;$(Nc)])]),"
-        "$([F;$(F-[#6]);!$(FC[F,Cl,Br,I])])]"
-    ));
+    std::unique_ptr<RDKit::ROMol> acceptor_patt(RDKit::SmartsToMol("[#8, nX2, $(N#C)]"));
     std::vector<int> hb_acceptors;
     std::vector<RDKit::MatchVectType> hb_acc_matches;
     RDKit::SubstructMatch(*protac_, *acceptor_patt, hb_acc_matches);
@@ -178,12 +174,7 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
 
     std::cout << "Finding donors..." << std::endl;
     // 识别氢键供体
-    std::unique_ptr<RDKit::ROMol> donor_patt(RDKit::SmartsToMol(
-        "[$([N&!H0&v3,N&!H0&+1&v4,n&H1&+0,$([$([Nv3](-C)(-C)-C)]),"
-        "$([$(n[n;H1]),$(nc[n;H1])])]),"
-        "$([NX3,NX2]([!O,!S])!@C(!@[NX3,NX2]([!O,!S]))!@[NX3,NX2]([!O,!S])),"
-        "$([O,S;H1;+0])]"
-    ));
+    std::unique_ptr<RDKit::ROMol> donor_patt(RDKit::SmartsToMol("[#7,#8;H;+0]"));
     std::vector<int> hb_donors;
     std::vector<RDKit::MatchVectType> hb_don_matches;
     RDKit::SubstructMatch(*protac_, *donor_patt, hb_don_matches);
@@ -443,7 +434,8 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
     list(warheads, rbond, verbose);
     // 计算参考内部能量
     protac_ = MinimizeH(*protac_);
-    E_intra_ref_ = e_intra(protac_.get());
+    //E_intra_ref_ = e_intra(protac_.get());
+    E_intra_ref_ = e_intra(static_cast<const RDKit::ROMol*>(&protac_ini_H));
     std::cout << "E_intra_ref: " << E_intra_ref_ << std::endl;
     // I want to check the linker atoms 
     if(verbose > 0 ){
@@ -601,14 +593,15 @@ void Protac::list(const std::vector<int>& warheads, const std::vector<std::pair<
                 
                 // 打印VdW参数
                 if (print_info) {
-                    // 打印原子类型和拓扑距离
-                    std::cout << "Atom pair " << i+1 << "-" << j+1 << ":\n"
-                              << "  Atom types: " << static_cast<int>(mmffProps.getMMFFAtomType(i)) 
-                              << "-" << static_cast<int>(mmffProps.getMMFFAtomType(j)) << "\n"
-                              << "  Topological distance: " << topDist[i][j] << "\n"
-                              << "  R_ij_star: " << vdwParams.R_ij_star << "\n"
-                              << "  epsilon: " << param.param1 << 
-                              (std::abs(topDist[i][j] - 3.0) < 0.001 ? " (scaled by 0.75)" : "") << std::endl;
+                    std::cout << std::fixed << std::setprecision(6)
+                              << "VdW: atoms=" << i << "-" << j 
+                              << " epsilon=" << param.param1 
+                              << " R_ij_star=" << param.param1_1
+                              << " param2=" << param.param2
+                              << " param3=" << param.param3
+                              << " param4=" << param.param4
+                              << " param5=" << param.param5
+                              << " topDist=" << topDist[i][j] << std::endl;
                 }
                 
                 list_vdw_.push_back(param);
@@ -647,12 +640,13 @@ void Protac::list(const std::vector<int>& warheads, const std::vector<std::pair<
 
                                 // 打印扭转参数
                                 if(print_info){
-                                    std::cout << "Dihedral parameters for atoms "
-                                          << a->getIdx() << ", " << bond.first << ", " 
-                                          << bond.second << ", " << b->getIdx() << ": "
-                                          << "V1 = " << torsionParams.V1 << ", "
-                                          << "V2 = " << torsionParams.V2 << ", "
-                                          << "V3 = " << torsionParams.V3 << std::endl;
+                                    std::cout << std::fixed << std::setprecision(6)
+                                              << "Dihe: atoms=" 
+                                              << a->getIdx() << "-" << bond.first << "-" 
+                                              << bond.second << "-" << b->getIdx() 
+                                              << " V1=" << torsionParams.V1 
+                                              << " V2=" << torsionParams.V2 
+                                              << " V3=" << torsionParams.V3 << std::endl;
                                 }
                                 DihedralParam param;
                                 param.atom1_idx = a->getIdx();
@@ -1265,15 +1259,14 @@ void Protac::search(bool verbose) {
     }
 }
 
-double Protac::e_intra(const RDKit::ROMol* mol = nullptr) const {
-    const RDKit::ROMol* working_mol = mol ? mol : protac_.get();
-    const RDKit::Conformer& conf = working_mol->getConformer();    
+double Protac::e_intra(const RDKit::ROMol* mol) const {
+    const RDKit::Conformer& conf = mol->getConformer();    
     
     double vdw = 0.0;
     
     std::vector<RDGeom::Point3D> coors;
-    coors.reserve(protac_->getNumAtoms());
-    for (size_t i = 0; i < protac_->getNumAtoms(); ++i) {
+    coors.reserve(mol->getNumAtoms());
+    for (size_t i = 0; i < mol->getNumAtoms(); ++i) {
         coors.push_back(conf.getAtomPos(i));
     }
     for (const auto& p : list_vdw_) {

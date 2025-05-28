@@ -1,6 +1,11 @@
-#include <fstream>
-#include <sstream>
 #include <iostream>
+#include <fstream>
+#include <string>
+#include <stdexcept>
+#include <limits>
+#include <cstdio>  // for std::remove
+#include <sstream>
+#include <memory>  // for std::unique_ptr and std::make_unique
 
 #include <GraphMol/RDKitBase.h>
 #include <GraphMol/Conformer.h>
@@ -15,6 +20,8 @@
 #include <Geometry/point.h>
 
 #include "ternify.hpp"
+#include "protac.hpp"
+#include "grid.hpp"
 
 
 void read_parameters(const std::string& filename, Parameters& params) {
@@ -102,18 +109,32 @@ void run_ternify(const Parameters& params) {
                         params.output_protein_file != "None" && 
                         params.output_protein_file != "none";
     
+    // 在程序开始时删除已存在的输出文件（重建）
+    std::cout << "Preparing output files..." << std::endl;
+    
+    // 删除PROTAC输出文件（如果存在）
+    if (std::remove(params.output_protac_file.c_str()) == 0) {
+        std::cout << "Removed existing PROTAC output file: " << params.output_protac_file << std::endl;
+    }
+    
+    // 删除蛋白质输出文件（如果存在且需要输出蛋白质）
     if (write_protein) {
-        std::cout << "Protein output will be written to numbered files based on: " << params.output_protein_file << std::endl;
+        if (std::remove(params.output_protein_file.c_str()) == 0) {
+            std::cout << "Removed existing protein output file: " << params.output_protein_file << std::endl;
+        }
+        std::cout << "PROTAC output: " << params.output_protac_file << std::endl;
+        std::cout << "Protein output: " << params.output_protein_file << std::endl;
     } else {
+        std::cout << "PROTAC output: " << params.output_protac_file << std::endl;
         std::cout << "Protein output disabled (Output_protein = None or not specified)" << std::endl;
     }
 
     // 创建网格
     std::cout << "Creating grid for anchor_pro..." << std::endl;
-    GRID grid_anchor;
+    std::unique_ptr<GRID> grid_anchor;
     bool grid_anchor_initialized = false;
     try {
-        grid_anchor = Grid(params.protein_anchor_file, params.interface, params.n_processes);
+        grid_anchor = std::make_unique<GRID>(Grid(params.protein_anchor_file, params.interface, params.n_processes));
         grid_anchor_initialized = true;
     } catch (const std::exception& e) {
         std::cerr << "Failed to create grid for anchor_pro: " << e.what() << std::endl;
@@ -143,10 +164,10 @@ void run_ternify(const Parameters& params) {
         site_flex[i][1] = max_val + 5.0;    
     }
 
-    GRID grid_flex;
+    std::unique_ptr<GRID> grid_flex;
     bool grid_flex_initialized = false;
     try {
-        grid_flex = Grid(params.protein_flex_file, site_flex, params.n_processes);
+        grid_flex = std::make_unique<GRID>(Grid(params.protein_flex_file, site_flex, params.n_processes));
         grid_flex_initialized = true;
     } catch (const std::exception& e) {
         std::cerr << "Failed to create grid for flex_pro: " << e.what() << std::endl;
@@ -156,11 +177,18 @@ void run_ternify(const Parameters& params) {
     if (!grid_flex_initialized) {
         std::cerr << "Warning: grid_flex was not initialized." << std::endl;
     }
+    
     // 处理PROTAC分子
     std::cout << "Reading protac file..." << std::endl;
     RDKit::SDMolSupplier protacs_supplier(params.protacs_file,true,true,false);
     size_t total_protacs = protacs_supplier.length();
     std::cout << "There is(are) " << protacs_supplier.length() << " protac molecule(s) to be processed..." << std::endl;
+    
+    // 创建输出文件流（在循环外创建，用于append模式）
+    std::unique_ptr<std::ofstream> protac_file_stream;
+    std::unique_ptr<RDKit::SDWriter> protac_writer;
+    std::unique_ptr<std::ofstream> protein_file_stream;
+    
     std::unique_ptr<RDKit::ROMol> mol;
     for (size_t protac_index = 0; protac_index < total_protacs; ++protac_index) {
         mol = std::unique_ptr<RDKit::ROMol>(protacs_supplier[protac_index]);
@@ -175,47 +203,35 @@ void run_ternify(const Parameters& params) {
                 continue;
             }
             
-            // 为每个PROTAC分子创建带编号的输出文件
-            std::string numbered_protac_file;
-            std::string numbered_protein_file;
-            
-            if (total_protacs > 1) {
-                // 多个分子时添加编号
-                size_t dot_pos = params.output_protac_file.find_last_of('.');
-                if (dot_pos != std::string::npos) {
-                    numbered_protac_file = params.output_protac_file.substr(0, dot_pos) + 
-                                         "_" + std::to_string(protac_index + 1) + 
-                                         params.output_protac_file.substr(dot_pos);
-                } else {
-                    numbered_protac_file = params.output_protac_file + "_" + std::to_string(protac_index + 1);
-                }
-                
-                if (write_protein) {
-                    dot_pos = params.output_protein_file.find_last_of('.');
-                    if (dot_pos != std::string::npos) {
-                        numbered_protein_file = params.output_protein_file.substr(0, dot_pos) + 
-                                              "_" + std::to_string(protac_index + 1) + 
-                                              params.output_protein_file.substr(dot_pos);
-                    } else {
-                        numbered_protein_file = params.output_protein_file + "_" + std::to_string(protac_index + 1);
-                    }
-                }
-            } else {
-                // 单个分子时使用原始文件名
-                numbered_protac_file = params.output_protac_file;
-                numbered_protein_file = params.output_protein_file;
+            // 检查网格是否都已成功初始化
+            if (!grid_anchor_initialized || !grid_flex_initialized) {
+                std::cerr << "Error: Cannot process PROTAC " << (protac_index + 1) 
+                         << " because grids are not properly initialized." << std::endl;
+                continue;
             }
             
-            // 创建输出文件
-            RDKit::SDWriter protac_writer(numbered_protac_file);
-            std::unique_ptr<std::ofstream> protein_writer;
-            
-            if (write_protein) {
-                protein_writer.reset(new std::ofstream(numbered_protein_file));
-                std::cout << "PROTAC output: " << numbered_protac_file << std::endl;
-                std::cout << "Protein output: " << numbered_protein_file << std::endl;
+            // 为第一个PROTAC分子创建输出文件，后续分子使用append模式
+            if (protac_index == 0 || !protac_writer) {
+                // 第一个分子：创建新文件
+                protac_file_stream.reset(new std::ofstream(params.output_protac_file));
+                protac_writer.reset(new RDKit::SDWriter(protac_file_stream.get()));
+                
+                if (write_protein) {
+                    protein_file_stream.reset(new std::ofstream(params.output_protein_file));
+                }
             } else {
-                std::cout << "PROTAC output: " << numbered_protac_file << std::endl;
+                // 后续分子：关闭当前writer，以append模式重新打开
+                protac_writer.reset();  // 关闭当前writer
+                protac_file_stream.reset();  // 关闭当前文件流
+                
+                // 以append模式打开文件
+                protac_file_stream.reset(new std::ofstream(params.output_protac_file, std::ios::app));
+                protac_writer.reset(new RDKit::SDWriter(protac_file_stream.get()));
+                
+                if (write_protein && protein_file_stream) {
+                    protein_file_stream.reset();  // 关闭当前writer
+                    protein_file_stream.reset(new std::ofstream(params.output_protein_file, std::ios::app));  // append模式
+                }
             }
             
             Protac PROTac;
@@ -223,8 +239,7 @@ void run_ternify(const Parameters& params) {
             // Initialize Protac object with the current molecule and other parameters
             PROTac.init(mol.get(), w_anch.get(), w_flex.get(),
                     params.protein_flex_file, params.n_processes,
-                    grid_anchor, grid_flex, params.verbose > 0);
-
+                    *grid_anchor, *grid_flex, params.verbose > 0);
             // Print Protac information based on verbose setting
             if (params.verbose > 0) {
                 std::cout << "Verbose mode enabled (level: " << params.verbose << ")" << std::endl;
@@ -236,7 +251,7 @@ void run_ternify(const Parameters& params) {
         
             std::cout << "Writing output..." << std::endl;
             // Write the output to the specified writer
-            PROTac.output(protac_writer, protein_writer ? *protein_writer : std::cout, params.n_keep, write_protein, params.output_rmsd_cutoff);            
+            PROTac.output(*protac_writer, protein_file_stream ? *protein_file_stream : std::cout, params.n_keep, write_protein, params.output_rmsd_cutoff);            
         } 
         else {
             std::cout << "Warning: Molecule " << protac_index + 1 << " is invalid or could not be read." << std::endl;
@@ -263,7 +278,7 @@ int main(int argc, char* argv[]) {
         std::cout << "TERNIFY: Efficient Sampling of PROTAC-Induced Ternary Complexes\n"
                   << "Hongtao Zhao, PhD\n"
                   << "Ximing XU, PhD [C++ implementation]\n"
-                  << "Version: 2025-05-27" << std::endl;
+                  << "Version: 2025-05-28" << std::endl;
 
         // 读取参数并运行
         Parameters params;
