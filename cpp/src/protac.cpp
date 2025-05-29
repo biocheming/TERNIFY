@@ -43,9 +43,11 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
     rng_ = std::mt19937(std::random_device{}());
     angle_dist_ = std::uniform_real_distribution<double>(-180.0, 180.0);
     uniform_dist_ = std::uniform_real_distribution<double>(0.0, 1.0);
-    // 初始化分子, 将优化H的protac赋值给了Protac类中的protac_,也算是protac_的第1次优化，只优化H的内容
-    protac_= MinimizeH(*protac);
+
+    // 初始化分子, 并优化
+    protac_= MinimizeH(*protac, 100.0, false);
     RDKit::RWMol protac_ini_H = *protac_ ;
+    
     // 获取构象
     RDKit::Conformer& conf_protac = protac_->getConformer();        //protac whole part
     const RDKit::Conformer& conf_anch = w_anch->getConformer(); 
@@ -87,7 +89,7 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
     }
     RDKit::MatchVectType match_01 = matches_01[0];
     
-    // 保存弹头原子索引用于RMSD计算
+    // 保存protac_弹头原子索引用于RMSD计算
     warhead_atoms_.clear();
     for (const auto& pair : match_01) {
         warhead_atoms_.push_back(pair.second);  // 保存protac中弹头原子的索引
@@ -106,7 +108,7 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
             // 检查邻居是否不在 match_01 中
             if (std::find_if(match_01.begin(), match_01.end(),
                 [&](const auto& p) { return p.second == neighborIdx; }) 
-                    == match_01.end()) {
+                    == match_01.end() && protac_->getAtomWithIdx(neighborIdx)->getAtomicNum() != 1) {
                 cp_01 = match_01[i].second;  // 存储实际的原子索引
                 cp_01_neighbor = neighborIdx;  // 存储邻居原子的索引
                 break;
@@ -120,7 +122,9 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
         std::cerr << "Could not find a connected unmatched atom." << std::endl;
         return;
     } else {
-        std::cout << "Connection 1: [" << cp_01 << "] - [" << cp_01_neighbor << "]" << std::endl;
+        if (verbose) {
+            std::cout << "Connection 1: [" << cp_01 << "] - [" << cp_01_neighbor << "]" << std::endl;
+        }
     }
 
     // 检查匹配的有效性
@@ -132,18 +136,57 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
                                    std::to_string(pair.second));
         }
     }
-
-    // 首先，我们需要反转match_01中的对应关系
-    RDKit::MatchVectType aligned_match;
-    // 填充aligned_match，交换pair的顺序
+    // 新的对齐策略：使用最小匹配单元进行精准对齐
+    if (verbose) {
+        std::cout << "Creating minimal matching unit for precise alignment..." << std::endl;
+    }
+    
+    // 找到连接点cp_01在w_flex中对应的原子索引
+    int cp_01_in_flex = -1;
     for (const auto& pair : match_01) {
-        aligned_match.push_back(std::make_pair(pair.second, pair.first));
+        if (pair.second == cp_01) {
+            cp_01_in_flex = pair.first;
+            break;
+        }
+    }
+    
+    if (cp_01_in_flex == -1) {
+        throw std::runtime_error("Could not find cp_01 in w_flex match");
+    }
+    
+    // 构建最小匹配单元：cp_01 + 与其在弹头中有键连接的原子
+    std::vector<std::pair<int, int>> minimal_pairs;
+    minimal_pairs.push_back(std::make_pair(cp_01, cp_01_in_flex));  // 连接点本身
+    
+    // 找到与cp_01在w_flex中有键连接的原子
+    for (const auto& pair : match_01) {
+        int protac_idx = pair.second;
+        int flex_idx = pair.first;
+        
+        // 检查w_flex中是否存在cp_01_in_flex与flex_idx之间的键
+        if (flex_idx != cp_01_in_flex && 
+            w_flex->getBondBetweenAtoms(cp_01_in_flex, flex_idx)) {
+            minimal_pairs.push_back(std::make_pair(protac_idx, flex_idx));
+        }
+    }
+
+    if (verbose) {
+        std::cout << "Minimal matching unit size: " << minimal_pairs.size() << " atoms" << std::endl;
+        for (const auto& pair : minimal_pairs) {
+            std::cout << "  protac atom " << pair.first << " -> w_flex atom " << pair.second << std::endl;
+        }
+    }
+    
+    // 创建对齐匹配向量（注意顺序：protac -> w_flex）
+    RDKit::MatchVectType aligned_match;
+    for (const auto& pair : minimal_pairs) {
+        aligned_match.push_back(std::make_pair(pair.first, pair.second));
     }
 
     // protac_是probe（要移动的），w_flex是ref（固定的参考）
     std::cout << "Aligning protac to flexible warhead..." << std::endl;
     try {
-        // 使用正确顺序的aligned_match进行对齐
+        // 使用最小匹配单元进行对齐
         RDKit::MolAlign::alignMol(*protac_, *w_flex, -1, -1, &aligned_match);
         std::cout << "Alignment completed" << std::endl;
     } catch (const std::exception& e) {
@@ -151,14 +194,38 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
         throw;
     }
     // 设置原子位置并记录索引
+    // 首先记录要移动的重原子的原始坐标
+    std::vector<RDGeom::Point3D> original_positions;
+    for (size_t i = 0; i < match_01.size(); ++i) {
+        original_positions.push_back(conf_protac.getAtomPos(match_01[i].second));
+    }
+    // 更新原子位置
     for (size_t i = 0; i < match_01.size(); ++i) {
         const RDGeom::Point3D& coor = conf_flex.getAtomPos(match_01[i].first); // 使用match_01[i].first来获取w_flex中的原子坐标
+        const RDGeom::Point3D& original_heavy_pos = original_positions[i]; 
+
         conf_protac.setAtomPos(match_01[i].second, coor);
         idx_.push_back(match_01[i].second);
+        
+        // 计算平移向量并应用到连接的氢原子
+        RDGeom::Point3D translation = coor - original_heavy_pos;
+        RDKit::Atom* heavy_atom = protac_->getAtomWithIdx(match_01[i].second);
+        
+        // 获取邻接原子的迭代器
+        auto [nbrIdx, endNbrs] = protac_->getAtomNeighbors(heavy_atom);
+        while (nbrIdx != endNbrs) {
+            RDKit::Atom* neighbor = protac_->getAtomWithIdx(*nbrIdx);
+            if (neighbor->getAtomicNum() == 1) {  // 氢原子
+                RDGeom::Point3D h_pos_before = conf_protac.getAtomPos(*nbrIdx);
+                RDGeom::Point3D h_target_pos = h_pos_before + translation;
+                conf_protac.setAtomPos(*nbrIdx, h_target_pos);
+            }
+            ++nbrIdx;
+        }
     }
-    //protac_的第2次优化，由于protac与POI的lig对齐，优化也固定POI的lig对应的部分
-    std::cout << "Minimization first time with flexible warhead fixed" << std::endl;
-    optimizeWithFixedAtoms(*protac_, idx_); //protac_的第2次优化，由于protac与POI的lig对齐，优化也固定POI的lig对应的部分
+    //optimizeWithFixedAtoms(*protac_, idx_); //protac_的第2次优化
+    //optimizeWithConstrAtoms(*protac_, idx_);
+
     conf_protac = protac_->getConformer();
     std::cout << "Finding acceptors..." << std::endl;
     // 识别氢键受体
@@ -241,7 +308,7 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
             // 检查邻居是否不在 match_02 中
             if (std::find_if(match_02.begin(), match_02.end(),
                 [&](const auto& p) { return p.second == neighborIdx; }) 
-                == match_02.end()) {
+                == match_02.end() && protac_->getAtomWithIdx(neighborIdx)->getAtomicNum() != 1) {
                 cp_02 = match_02[i].second;  // 存储实际的原子索引
                 cp_02_neighbor = neighborIdx;  // 存储邻居原子的索引
                 break;
@@ -253,33 +320,115 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
 
     // 添加调试信息
     if (cp_02 != -1) {
-        std::cout << "Connection 2: [" << cp_02 
-                  << "] - [" << cp_02_neighbor << "]" << std::endl;
+        if (verbose) {
+            std::cout << "Connection 2: [" << cp_02 << "] - [" << cp_02_neighbor << "]" << std::endl;
+        }
     } else {
         std::cerr << "Could not find a connected unmatched atom." << std::endl;
         return;
     }
+    
 
-    aligned_match.clear();
-    // 创建新的匹配关系
-    for (const auto& pair : match_02) {
-        aligned_match.push_back(std::make_pair(pair.second, pair.first));
+   // 新的对齐策略：使用最小匹配单元进行精准对齐（第二个弹头）
+    std::cout << "Creating minimal matching unit for anchor alignment..." << std::endl;
+    
+    if (cp_02 == -1) {
+        throw std::runtime_error("Could not find connection point cp_02");
     }
-    std::cout << "Aligning protac to anchor warhead..." << std::endl;
+    
+    // 构建最小匹配单元：按照Python版本的逻辑
+    std::vector<std::pair<int, int>> minimal_pairs_anch;
+    
+    // 首先添加连接点：(protac中的原子索引, w_anch中的原子索引)
+    // 这里需要找到cp_02在match_02中的位置
+    int cp_02_match_index = -1;
+    for (size_t i = 0; i < match_02.size(); ++i) {
+        if (match_02[i].second == cp_02) {  // cp_02是protac中的原子索引
+            cp_02_match_index = i;
+            break;
+        }
+    }
+    
+    if (cp_02_match_index == -1) {
+        throw std::runtime_error("Could not find cp_02 in match_02");
+    }
+    
+    // 添加连接点
+    minimal_pairs_anch.push_back(std::make_pair(
+        match_02[cp_02_match_index].second,  // protac中的原子索引
+        match_02[cp_02_match_index].first    // w_anch中的原子索引
+    ));
+    if (verbose) {
+        std::cout << "Connection point: protac atom " << match_02[cp_02_match_index].second 
+                << " -> w_anch atom " << match_02[cp_02_match_index].first << std::endl;
+    }
+    
+    // 找到与连接点在w_anch中有键连接的原子
+    for (size_t i = 0; i < match_02.size(); ++i) {
+        if (static_cast<int>(i) != cp_02_match_index) {  // 不是连接点本身
+            // 检查w_anch中是否存在连接点与当前原子之间的键
+            if (w_anch->getBondBetweenAtoms(match_02[cp_02_match_index].first, match_02[i].first)) {
+                minimal_pairs_anch.push_back(std::make_pair(
+                    match_02[i].second,  // protac中的原子索引
+                    match_02[i].first    // w_anch中的原子索引
+                ));
+                if (verbose) {  
+                    std::cout << "Found bonded atom: protac atom " << match_02[i].second 
+                            << " -> w_anch atom " << match_02[i].first << std::endl;
+                }
+            }
+        }
+    }
+    
+    // 创建对齐匹配向量
+    aligned_match.clear();
+    for (const auto& pair : minimal_pairs_anch) {
+        aligned_match.push_back(std::make_pair(pair.first, pair.second));
+    }
+    
     // 执行分子对齐
-    RDKit::MolAlign::alignMol(*protac_, *w_anch, -1, -1, &aligned_match);
+    std::cout << "Aligning protac to anchor warhead using minimal matching unit..." << std::endl;
+    try {
+        RDKit::MolAlign::alignMol(*protac_, *w_anch, -1, -1, &aligned_match);
+        std::cout << "Anchor minimal unit alignment completed" << std::endl;
+        
+    } catch (const std::exception& e) {
+        std::cerr << "Error during anchor minimal unit alignment: " << e.what() << std::endl;
+        throw;
+    }
+
     // 更新原子位置
     std::vector<int> AnchMatchedIDInProtac;
+    // 首先记录要移动的重原子的原始坐标
+    std::vector<RDGeom::Point3D> original_anch_positions;
+    for (size_t i = 0; i < match_02.size(); ++i) {
+        original_anch_positions.push_back(conf_protac.getAtomPos(match_02[i].second));
+    }
+        
     for (size_t i = 0; i < match_02.size(); ++i) {
         const RDGeom::Point3D& coor = conf_anch.getAtomPos(match_02[i].first);
+        // Original heavy atom position in protac_ before moving IT
+        const RDGeom::Point3D& original_heavy_pos = original_anch_positions[i]; 
+        
         conf_protac.setAtomPos(match_02[i].second, coor);
         AnchMatchedIDInProtac.push_back(match_02[i].second);
+
+        RDGeom::Point3D translation = coor - original_heavy_pos;
+        RDKit::Atom* heavy_atom = protac_->getAtomWithIdx(match_02[i].second);
+        // 获取邻接原子的迭代器
+        auto [nbrIdx, endNbrs] = protac_->getAtomNeighbors(heavy_atom);
+        while (nbrIdx != endNbrs) {
+            RDKit::Atom* neighbor = protac_->getAtomWithIdx(*nbrIdx);
+            if (neighbor->getAtomicNum() == 1) {  // 氢原子
+                RDGeom::Point3D h_pos_before = conf_protac.getAtomPos(*nbrIdx);
+                RDGeom::Point3D h_target_pos = h_pos_before + translation;
+                conf_protac.setAtomPos(*nbrIdx, h_target_pos);
+            }
+            ++nbrIdx;
+        }
     }
-    // Minimization second time
-    //protac_的第3次优化，由于protac与E3的lig对齐，优化也固定E3的lig对应的部分
-    //搜索构象时候，protac中E3_lig部分是固定的，但对应的POI_lig部分的坐标自由的，但其相对构象不变
-    std::cout << "Minimization: anchor fixed, flexible warhead dihedral constrained..." << std::endl;
-    MiniFixAtomTor(*protac_, AnchMatchedIDInProtac, idx_); 
+    //MiniFixAtomTor(*protac_, AnchMatchedIDInProtac, idx_); 
+    optimizeH(*protac_, 100.0);
     conf_protac = protac_->getConformer();
     // 计算不在match_02中的原子的电荷
     std::vector<int> match_02_indices;
@@ -432,8 +581,8 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
     // 调用list函数处理warheads和rbond
     std::cout << "Processing FF parameters..." << std::endl;
     list(warheads, rbond, verbose);
+    //protac_ = MinimizeH(*protac_, 15.0, false);
     // 计算参考内部能量
-    protac_ = MinimizeH(*protac_);
     //E_intra_ref_ = e_intra(protac_.get());
     E_intra_ref_ = e_intra(static_cast<const RDKit::ROMol*>(&protac_ini_H));
     std::cout << "E_intra_ref: " << E_intra_ref_ << std::endl;
@@ -445,14 +594,10 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
             std::cout << atom_idx - 1 << "-" << atom_i->getSymbol() << " ";
         }
         std::cout << std::endl;
-    }
-    // 输出初始化后的分子构象到SDF文件
-    RDKit::SDWriter writer("protac_initialized.sdf");
-    writer.write(*protac_);
-    writer.close();    
+    }  
 }
 
-// 扫描单个二面角的低能构象
+// ==================扫描单个二面角的低能构象=========================
 std::vector<double> Protac::scanTorsion(double v1, double v2, double v3) {
     std::vector<double> lowEnerDiheAngles;
     std::vector<std::pair<double, double>> angle_energies;
@@ -490,6 +635,7 @@ std::vector<double> Protac::listTorsion(double grid_step){
     return listDiheAngles;
 }
 
+//=================== GET FF PARAMETERS ========================
 void Protac::list(const std::vector<int>& warheads, const std::vector<std::pair<int, int>>& rbond, bool print_info) {
     // 首先检查输入参数的有效性
     if (!protac_) {
@@ -593,6 +739,7 @@ void Protac::list(const std::vector<int>& warheads, const std::vector<std::pair<
                 
                 // 打印VdW参数
                 if (print_info) {
+                    /*
                     std::cout << std::fixed << std::setprecision(6)
                               << "VdW: atoms=" << i << "-" << j 
                               << " epsilon=" << param.param1 
@@ -602,6 +749,7 @@ void Protac::list(const std::vector<int>& warheads, const std::vector<std::pair<
                               << " param4=" << param.param4
                               << " param5=" << param.param5
                               << " topDist=" << topDist[i][j] << std::endl;
+                              */
                 }
                 
                 list_vdw_.push_back(param);
@@ -640,6 +788,7 @@ void Protac::list(const std::vector<int>& warheads, const std::vector<std::pair<
 
                                 // 打印扭转参数
                                 if(print_info){
+                                    /*
                                     std::cout << std::fixed << std::setprecision(6)
                                               << "Dihe: atoms=" 
                                               << a->getIdx() << "-" << bond.first << "-" 
@@ -647,6 +796,7 @@ void Protac::list(const std::vector<int>& warheads, const std::vector<std::pair<
                                               << " V1=" << torsionParams.V1 
                                               << " V2=" << torsionParams.V2 
                                               << " V3=" << torsionParams.V3 << std::endl;
+                                              */
                                 }
                                 DihedralParam param;
                                 param.atom1_idx = a->getIdx();
@@ -1386,7 +1536,7 @@ void Protac::printProtacInfo(){
     std::cout << "Number of bonds: " << protac_->getNumBonds() << std::endl;
     std::cout << "IntraEnergy    : " << e_intra(protac_.get()) << std::endl;
     // 将MolBlock写入到文件
-    std::ofstream outFile("init_protac.sdf");
+    std::ofstream outFile("initialized_protac.sdf");
     if (outFile.is_open()) {
         outFile << RDKit::MolToMolBlock(*protac_) << "\n$$$$\n";
         outFile.close();

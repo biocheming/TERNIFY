@@ -4,11 +4,18 @@
 #include <memory>
 #include <vector>
 
-std::shared_ptr<RDKit::ROMol> MinimizeH(const RDKit::ROMol& input_mol) {
+std::shared_ptr<RDKit::ROMol> MinimizeH(const RDKit::ROMol& input_mol, double forceConst, bool addH_only) {
+    
+    if (addH_only) {
+        // First create a copy of the input molecule without hydrogens
+        std::shared_ptr<RDKit::ROMol> mol_no_h(RDKit::MolOps::removeHs(input_mol));
+        // Then add hydrogens with 3D coordinates
+        std::shared_ptr<RDKit::ROMol> mol(RDKit::MolOps::addHs(*mol_no_h, false, true));
+        return mol;
+    }
     
     // 添加氢原子并生成坐标
     std::shared_ptr<RDKit::ROMol> mol(RDKit::MolOps::addHs(input_mol, false, true));
-    
     // 创建MMFF力场
     RDKit::MMFF::MMFFMolProperties mmffProps(*mol, "MMFF94s");
     if (!mmffProps.isValid()) {
@@ -32,18 +39,51 @@ std::shared_ptr<RDKit::ROMol> MinimizeH(const RDKit::ROMol& input_mol) {
         if (mol->getAtomWithIdx(i)->getAtomicNum() > 1) {
             ForceFields::ContribPtr pc(
                 new ForceFields::MMFF::PositionConstraintContrib(
-                    ff.get(), i, 0.0, 1.0e9));  // 适中的约束强度
+                    ff.get(), i, 0.0, forceConst));  // 适中的约束强度
             ff->contribs().push_back(pc);
         }
     }
     
     // 最小化氢原子位置
-    ff->minimize(10000);
+    ff->minimize(1000);
     
     return mol;
 }
 
-void optimizeWithFixedAtoms(RDKit::ROMol& mol, const std::vector<int>& fixedAtoms) {
+void optimizeH(RDKit::ROMol& mol, double forceConst) {
+    // 创建MMFF力场
+    RDKit::MMFF::MMFFMolProperties mmffProps(mol, "MMFF94s");
+    if (!mmffProps.isValid()) {
+        throw std::runtime_error("MMFF properties are invalid for this molecule.");
+    }
+    
+    // 关闭VDW和静电相互作用
+    mmffProps.setMMFFVdWTerm(false);
+    mmffProps.setMMFFEleTerm(false);
+    
+    // 构建力场
+    std::unique_ptr<ForceFields::ForceField> ff(
+        RDKit::MMFF::constructForceField(mol, &mmffProps));
+    
+    if (!ff) {
+        throw std::runtime_error("Failed to construct force field");
+    }
+    
+    // 对重原子添加位置约束（而不是完全固定）
+    for (unsigned int i = 0; i < mol.getNumAtoms(); ++i) {
+        if (mol.getAtomWithIdx(i)->getAtomicNum() > 1) {
+            ForceFields::ContribPtr pc(
+                new ForceFields::MMFF::PositionConstraintContrib(
+                    ff.get(), i, 0.0, forceConst));  // 适中的约束强度
+            ff->contribs().push_back(pc);
+        }
+    }
+    
+    // 最小化氢原子位置
+    ff->minimize(1000);
+}
+
+void optimizeWithConstrAtoms(RDKit::ROMol& mol, const std::vector<int>& fixedAtoms) {
     // 初始化 MMFF 参数
     RDKit::MMFF::MMFFMolProperties mmffProps(mol, "MMFF94s");
     if (!mmffProps.isValid()) {
@@ -59,15 +99,97 @@ void optimizeWithFixedAtoms(RDKit::ROMol& mol, const std::vector<int>& fixedAtom
         return;
     }
 
-    // 将指定的原子固定
-    for (int idx : fixedAtoms) {
-        if (mol.getAtomWithIdx(idx)->getAtomicNum() > 1) {
-            ff->fixedPoints().push_back(idx);
+    // 对固定原子添加位置约束（而不是完全固定）
+    for (size_t i = 0; i < fixedAtoms.size(); ++i) {
+        int idx = fixedAtoms[i];
+        if (idx >= 0 && static_cast<unsigned int>(idx) < mol.getNumAtoms() && 
+            mol.getAtomWithIdx(idx)->getAtomicNum() > 1) {
+            
+            // 使用适中的力常数进行位置约束
+            ForceFields::ContribPtr pc(
+                new ForceFields::MMFF::PositionConstraintContrib(
+                    ff.get(), idx, 0.0, 100.0));  // 适中的约束强度，允许小幅移动
+            ff->contribs().push_back(pc);
         }
     }
     // 执行力场优化
-    int maxIters = 10000;  // 设置最大迭代次数
+    int maxIters = 500;  // 设置最大迭代次数
     ff->minimize(maxIters);
+}
+
+
+void optimizeWithFixedAtoms(RDKit::ROMol& mol, const std::vector<int>& fixedAtoms) {
+    // 初始化 MMFF 参数
+    RDKit::MMFF::MMFFMolProperties mmffProps(mol, "MMFF94s");
+    if (!mmffProps.isValid()) {
+        std::cerr << "MMFF properties are invalid for this molecule." << std::endl;
+        return;
+    }
+
+    // 第一步：记录固定原子的初始坐标
+    std::vector<RDGeom::Point3D> fixed_poses;
+    RDKit::Conformer& conf = mol.getConformer();
+    for (int idx : fixedAtoms) {
+        if (idx >= 0 && static_cast<unsigned int>(idx) < mol.getNumAtoms()) {
+            fixed_poses.push_back(conf.getAtomPos(idx));
+        }
+    }
+
+    // 第一步：使用位置约束进行温和优化
+    std::unique_ptr<ForceFields::ForceField> ff1(
+        RDKit::MMFF::constructForceField(mol, &mmffProps, 1e9, -1, true));
+    
+    if (!ff1) {
+        std::cerr << "Failed to initialize MMFF force field for constrained optimization." << std::endl;
+        return;
+    }
+
+    // 对固定原子添加位置约束（而不是完全固定）
+    for (size_t i = 0; i < fixedAtoms.size(); ++i) {
+        int idx = fixedAtoms[i];
+        if (idx >= 0 && static_cast<unsigned int>(idx) < mol.getNumAtoms() && 
+            mol.getAtomWithIdx(idx)->getAtomicNum() > 1) {
+            
+            // 使用适中的力常数进行位置约束
+            ForceFields::ContribPtr pc(
+                new ForceFields::MMFF::PositionConstraintContrib(
+                    ff1.get(), idx, 0.0, 100.0));  // 适中的约束强度，允许小幅移动
+            ff1->contribs().push_back(pc);
+        }
+    }
+
+    // 执行第一轮优化（位置约束优化）
+    int maxIters1 = 500;
+    ff1->minimize(maxIters1);
+
+    // 第二步：恢复固定原子的原始坐标
+    for (size_t i = 0; i < fixedAtoms.size(); ++i) {
+        int idx = fixedAtoms[i];
+        if (idx >= 0 && static_cast<unsigned int>(idx) < mol.getNumAtoms()) {
+            conf.setAtomPos(idx, fixed_poses[i]);
+        }
+    }
+
+    // 第二步：完全固定这些原子进行最终优化
+    std::unique_ptr<ForceFields::ForceField> ff2(
+        RDKit::MMFF::constructForceField(mol, &mmffProps, 1e9, -1, true));
+    
+    if (!ff2) {
+        std::cerr << "Failed to initialize MMFF force field for fixed optimization." << std::endl;
+        return;
+    }
+
+    // 将指定的原子完全固定
+    for (int idx : fixedAtoms) {
+        if (idx >= 0 && static_cast<unsigned int>(idx) < mol.getNumAtoms() && 
+            mol.getAtomWithIdx(idx)->getAtomicNum() > 1) {
+            ff2->fixedPoints().push_back(idx);
+        }
+    }
+
+    // 执行第二轮优化（固定原子优化）
+    int maxIters2 = 500;
+    ff2->minimize(maxIters2);
 }
 
 void MiniFixAtomTor(RDKit::ROMol& mol, 
@@ -96,14 +218,28 @@ void MiniFixAtomTor(RDKit::ROMol& mol,
     if (!ff) {
         throw std::runtime_error("Could not create MMFF94s force field");
     }
-    
+    // 关闭VDW和静电相互作用
+    mmffProps.setMMFFVdWTerm(false);
+    mmffProps.setMMFFEleTerm(false);
+/*    
     // 固定原子位置
     for (int fixid : fixatoms) {
         if (mol.getAtomWithIdx(fixid)->getAtomicNum() > 1) {
             ff->fixedPoints().push_back(fixid);
         }
     }
-    
+*/
+    // 使用位置约束代替固定原子位置
+    for (int fixid : fixatoms) {
+        if (mol.getAtomWithIdx(fixid)->getAtomicNum() > 1) {
+            // 添加位置约束而不是完全固定
+            ForceFields::ContribPtr pc(
+                new ForceFields::MMFF::PositionConstraintContrib(
+                    ff.get(), fixid, 0.0, 100.0));  // 使用20.0的力常数进行位置约束
+            ff->contribs().push_back(pc);
+        }
+    }
+
     // 添加二面角约束
     for (size_t i = 0; i < idx_.size(); ++i) {
         for (size_t j = 0; j < idx_.size(); ++j) {
@@ -136,5 +272,5 @@ void MiniFixAtomTor(RDKit::ROMol& mol,
         }
     }
     
-    ff->minimize(5000);
+    ff->minimize(100);
 }
