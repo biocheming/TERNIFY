@@ -32,6 +32,33 @@ void read_parameters(const std::string& filename, Parameters& params) {
 
     std::string line;
     while (std::getline(file, line)) {
+        // 去除行首行尾的空白字符
+        line.erase(0, line.find_first_not_of(" \t"));
+        line.erase(line.find_last_not_of(" \t") + 1);
+        
+        // 跳过空行
+        if (line.empty()) {
+            continue;
+        }
+        
+        // 跳过以#开头的注释行
+        if (line[0] == '#') {
+            continue;
+        }
+        
+        // 处理行内注释：找到#的位置，截取#之前的内容
+        size_t comment_pos = line.find('#');
+        if (comment_pos != std::string::npos) {
+            line = line.substr(0, comment_pos);
+            // 再次去除可能的尾部空白字符
+            line.erase(line.find_last_not_of(" \t") + 1);
+        }
+        
+        // 跳过处理注释后变为空的行
+        if (line.empty()) {
+            continue;
+        }
+        
         std::istringstream iss(line);
         std::string key, value;
         
@@ -278,7 +305,7 @@ int main(int argc, char* argv[]) {
         std::cout << "TERNIFY: Efficient Sampling of PROTAC-Induced Ternary Complexes\n"
                   << "Hongtao Zhao, PhD\n"
                   << "Ximing XU, PhD [C++ implementation]\n"
-                  << "Version: 2025-05-28" << std::endl;
+                  << "Version: 2025-05-29" << std::endl;
 
         // 读取参数并运行
         Parameters params;
