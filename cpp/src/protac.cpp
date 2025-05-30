@@ -45,8 +45,9 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
     uniform_dist_ = std::uniform_real_distribution<double>(0.0, 1.0);
 
     // 初始化分子, 并优化
-    protac_= MinimizeH(*protac, 1.0e4, false);
+    protac_= MinimizeH(*protac, 1.0e9, false);
     RDKit::RWMol protac_ini_H = *protac_ ;
+    RDKit::computeGasteigerCharges(*protac_);
     
     // 获取构象
     RDKit::Conformer& conf_protac = protac_->getConformer();        //protac whole part
@@ -222,7 +223,7 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
     }
     //optimizeWithFixedAtoms(*protac_, idx_); //protac_的第2次优化
     //optimizeWithConstrAtoms(*protac_, idx_);
-    optimizeH(*protac_, 1.0e3);
+    optimizeH(*protac_, 1.0e5);
     conf_protac = protac_->getConformer();
     std::cout << "Finding acceptors..." << std::endl;
     // 识别氢键受体
@@ -395,11 +396,8 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
         }
     }
     //MiniFixAtomTor(*protac_, AnchMatchedIDInProtac, idx_); 
-    optimizeH(*protac_, 100.0);
+    optimizeH(*protac_, 1.0e5);
     conf_protac = protac_->getConformer();
-    
-    // 所有分子对齐完成后重新计算Gasteiger电荷（匹配Python版本的时机）
-//    RDKit::computeGasteigerCharges(*protac_);
     
     // 首先计算q_anchor：不在match_01中的原子（只包含重原子）
     for (size_t i = 0; i < protac_->getNumAtoms(); ++i) {
@@ -440,7 +438,7 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
             }
             
             // 添加到q_anchor列表
-            hb_type = std::nullopt;
+            //hb_type = std::nullopt; // python version
             q_anchor_.push_back(std::make_tuple(i, total_charge, hb_type));
         }
     }
@@ -489,7 +487,7 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
             }
             
             // 添加到q_flex列表
-            hb_type = std::nullopt;
+            //hb_type = std::nullopt;  // python version
             q_flex_.push_back(std::make_tuple(i, total_charge, hb_type));
         }
     }
@@ -611,9 +609,8 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
     // 调用list函数处理warheads和rbond
     std::cout << "Processing FF parameters..." << std::endl;
     list(warheads, rbond, verbose);
-    //protac_ = MinimizeH(*protac_, 15.0, false);
     // 计算参考内部能量（基于经过两次对齐和优化的构象）
-    E_intra_ref_ = e_intra(protac_.get());
+    E_intra_ref_ = e_intra(&protac_ini_H);
     std::cout << "E_intra_ref: " << E_intra_ref_ << std::endl;
     // I want to check the linker atoms 
     if(verbose > 0 ){
