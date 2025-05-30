@@ -62,7 +62,7 @@ GRID Grid(const std::string& fpro, const VolRegion& pocket, int processes) {
             dim[1],
             std::vector<GridValue>(
                 dim[2],
-                GridValue(0.0, 0.0, 0.0, 0.0)
+                GridValue(0.0, 0.0, std::nullopt, std::nullopt)
             )
         )
     );
@@ -79,17 +79,21 @@ GRID Grid(const std::string& fpro, const VolRegion& pocket, int processes) {
                     std::stod(line.substr(46, 8))
                 };
                 if (coor[0] >= nbsize[0][0] && coor[0] <= nbsize[0][1] &&
-                    coor[1] > nbsize[1][0] && coor[1] <= nbsize[1][1] &&
+                    coor[1] >= nbsize[1][0] && coor[1] <= nbsize[1][1] &&
                     coor[2] >= nbsize[2][0] && coor[2] <= nbsize[2][1]) {
                     
                     std::string res = line.substr(17, 3);
                     if (res == "HIS") res = "HSD";
-                    atp = res + "_" + line.substr(13, 3);
+                    std::string atom_name = line.substr(13, 3);
+                    // Strip spaces from atom name like Python version
+                    atom_name.erase(0, atom_name.find_first_not_of(" "));
+                    atom_name.erase(atom_name.find_last_not_of(" ") + 1);
+                    atp = res + "_" + atom_name;
                     double q = (atomtypes.count(atp) > 0) ? paras["elec_scaling"] * atomtypes[atp] : 0;
                     atoms.push_back({coor, q});
                 }
                 if (coor[0] >= pocket[0][0] && coor[0] <= pocket[0][1] &&
-                    coor[1] > pocket[1][0] && coor[1] <= pocket[1][1] &&
+                    coor[1] >= pocket[1][0] && coor[1] <= pocket[1][1] &&
                     coor[2] >= pocket[2][0] && coor[2] <= pocket[2][1]) {
                     
                     std::array<int, 3> loc = {
@@ -139,30 +143,28 @@ GRID Grid(const std::string& fpro, const VolRegion& pocket, int processes) {
                                         if (it != hbondtypes.end()) {
                                             hd_type = it->second;
                                             if (dist < paras["ub_hbond_dist"]) {
-                                                if (hd_type == 2){ //如果蛋白原子是donor，则格点应该储存氢键受体的能量
-                                                    if (grid[i][j][k].hd_acceptor.has_value()) {
-                                                        grid[i][j][k].hd_acceptor.value() += (paras["ub_hbond_dist"] - dist) * paras["e_hbond"];
-                                                        if (grid[i][j][k].hd_acceptor.value() < paras["e_hbond"]) {
-                                                            grid[i][j][k].hd_acceptor.value() = paras["e_hbond"];
-                                                        }
+                                                if (hd_type == 2){ //如果蛋白原子是donor，则格点应该储存氢键给体的能量
+                                                    if (!grid[i][j][k].hd_donor.has_value()) {
+                                                        grid[i][j][k].hd_donor = 0.0;
+                                                    }
+                                                    grid[i][j][k].hd_donor.value() += (paras["ub_hbond_dist"] - dist) * paras["e_hbond"];
+                                                    if (grid[i][j][k].hd_donor.value() < paras["e_hbond"]) {
+                                                        grid[i][j][k].hd_donor.value() = paras["e_hbond"];
                                                     }
                                                 }
-                                                else if (hd_type == 3){ //如果蛋白原子是acceptor，则格点应该储存氢键给体的能量
-                                                    if (grid[i][j][k].hd_donor.has_value()) {
-                                                        grid[i][j][k].hd_donor.value() += (paras["ub_hbond_dist"] - dist) * paras["e_hbond"];
-                                                        if (grid[i][j][k].hd_donor.value() < paras["e_hbond"]) {
-                                                            grid[i][j][k].hd_donor.value() = paras["e_hbond"];
-                                                        }
+                                                else if (hd_type == 3){ //如果蛋白原子是acceptor，则格点应该储存氢键受体的能量
+                                                    if (!grid[i][j][k].hd_acceptor.has_value()) {
+                                                        grid[i][j][k].hd_acceptor = 0.0;
+                                                    }
+                                                    grid[i][j][k].hd_acceptor.value() += (paras["ub_hbond_dist"] - dist) * paras["e_hbond"];
+                                                    if (grid[i][j][k].hd_acceptor.value() < paras["e_hbond"]) {
+                                                        grid[i][j][k].hd_acceptor.value() = paras["e_hbond"];
                                                     }
                                                 }
                                                 else {
                                                     std::cerr << "Error: hbondtype [" << hd_type << "] is not supported for atom [" << atp << "]" << std::endl;
                                                 }
                                             }
-                                        }
-                                        else {
-                                            grid[i][j][k].hd_acceptor = 0;
-                                            grid[i][j][k].hd_donor = 0;
                                         }
                                     }
                                 }

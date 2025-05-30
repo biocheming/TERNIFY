@@ -40,16 +40,16 @@ void Protein::ReadProt(const std::string& filename, const std::array<double, 3>&
                 if (atom_it != atomtypes.end()) {
                     auto hbond_it = hbondtypes.find(atp);
                     if (hbond_it != hbondtypes.end()) {
-                        if (hbondtypes[atp]== 2) {
-                            para.push_back(std::make_tuple(std::nullopt, atomtypes[atp], 2));
-                        } else { //hbondtypes[atp]== 3
+                        if (hbondtypes[atp] == 2) {
                             para.push_back(std::make_tuple(std::nullopt, atomtypes[atp], 3));
+                        } else { //hbondtypes[atp] == 3
+                            para.push_back(std::make_tuple(std::nullopt, atomtypes[atp], 2));
                         }
                     } else {
-                        para.push_back(std::make_tuple(std::nullopt, atomtypes[atp], 0));
+                        para.push_back(std::make_tuple(std::nullopt, atomtypes[atp], std::nullopt));
                     }
                 } else {
-                    para.push_back(std::make_tuple(std::nullopt, 0.0, 0));
+                    para.push_back(std::make_tuple(std::nullopt, 0.0, std::nullopt));
                 }
             }
         }

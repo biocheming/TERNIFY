@@ -6,6 +6,7 @@
 #include <cstdio>  // for std::remove
 #include <sstream>
 #include <memory>  // for std::unique_ptr and std::make_unique
+#include <iomanip>
 
 #include <GraphMol/RDKitBase.h>
 #include <GraphMol/Conformer.h>
@@ -105,6 +106,7 @@ void read_parameters(const std::string& filename, Parameters& params) {
             else if (key == "N_keep") params.n_keep = std::stoi(value);
             else if (key == "N_processes") params.n_processes = std::stoi(value);
             else if (key == "Verbose") params.verbose = std::stoi(value);
+            else if (key == "Score_only") params.score_only = (std::stoi(value) != 0);
         }
     }
 }
@@ -273,8 +275,31 @@ void run_ternify(const Parameters& params) {
                 PROTac.printProtacInfo();
             }
 
-            std::cout << "Sampling and Searching..." << std::endl;
-            PROTac.sample(params.n_ini, params.n_search, params.verbose > 0);
+            if (params.score_only) {
+                std::cout << "Score Only Mode Enabled..." << std::endl;
+                double energy = PROTac.score_only(params.verbose > 0);
+                std::cout << "Final energy score: " << std::fixed << std::setprecision(3) << energy << " kcal/mol" << std::endl;
+                
+                // 在score_only模式下，我们不需要采样和搜索，但可以输出当前构象
+                std::cout << "Saving current conformation to output..." << std::endl;
+                // 创建一个简单的solution用于输出
+                Protac::Solution current_solution;
+                const RDKit::Conformer& conf = PROTac.getProtac()->getConformer();
+                const auto& rot_dihe = PROTac.getRotatableDihedrals();
+                for (size_t i = 0; i < rot_dihe.size(); ++i) {
+                    const auto& atoms = rot_dihe[i];
+                    double angle = MolTransforms::getDihedralDeg(conf, atoms[0], atoms[1], atoms[2], atoms[3]);
+                    current_solution.dihedrals.push_back(angle);
+                }
+                current_solution.energy = energy;
+                
+                // 清空solutions_并添加当前解
+                PROTac.clearSolutions();
+                PROTac.addSolution(current_solution);
+            } else {
+                std::cout << "Sampling and Searching..." << std::endl;
+                PROTac.sample(params.n_ini, params.n_search, params.verbose > 0);
+            }
         
             std::cout << "Writing output..." << std::endl;
             // Write the output to the specified writer

@@ -27,8 +27,8 @@ std::vector<std::array<double, 3>> Align(const std::vector<std::array<double, 3>
 
 // Align coordinates with a specific translation
 std::vector<std::array<double, 3>> Align2(const std::vector<std::array<double, 3>>& coords,
-                                            const std::vector<std::array<double, 3>>& coord_subs_var,
                                             const std::vector<std::array<double, 3>>& coord_ref,
+                                            const std::vector<std::array<double, 3>>& coord_subs_var,
                                             const std::array<double, 3>& translation);
 
 // 找出两个分子中对应的可旋转二面角

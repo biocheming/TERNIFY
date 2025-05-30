@@ -45,7 +45,7 @@ std::shared_ptr<RDKit::ROMol> MinimizeH(const RDKit::ROMol& input_mol, double fo
     }
     
     // 最小化氢原子位置
-    ff->minimize(1000);
+    ff->minimize(10000);
     
     return mol;
 }

@@ -45,16 +45,13 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
     uniform_dist_ = std::uniform_real_distribution<double>(0.0, 1.0);
 
     // 初始化分子, 并优化
-    protac_= MinimizeH(*protac, 100.0, false);
+    protac_= MinimizeH(*protac, 1.0e4, false);
     RDKit::RWMol protac_ini_H = *protac_ ;
     
     // 获取构象
     RDKit::Conformer& conf_protac = protac_->getConformer();        //protac whole part
     const RDKit::Conformer& conf_anch = w_anch->getConformer(); 
     const RDKit::Conformer& conf_flex = w_flex->getConformer();
-
-    // 计算Gasteiger电荷
-    RDKit::computeGasteigerCharges(*protac_, 24, true);
 
     // 移动w_flex坐标到原点
     RDGeom::POINT3D_VECT coords_flex_conf = conf_flex.getPositions();
@@ -225,7 +222,7 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
     }
     //optimizeWithFixedAtoms(*protac_, idx_); //protac_的第2次优化
     //optimizeWithConstrAtoms(*protac_, idx_);
-
+    optimizeH(*protac_, 1.0e3);
     conf_protac = protac_->getConformer();
     std::cout << "Finding acceptors..." << std::endl;
     // 识别氢键受体
@@ -251,41 +248,11 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
         }
     }
 
-    // 计算不在match_01中的原子的电荷
+    // 先进行第一次对齐，但暂不计算电荷
+    // 计算不在match_01中的原子的索引，稍后计算电荷
     std::vector<int> match_01_indices;
     for (const auto& pair : match_01) {
         match_01_indices.push_back(pair.second);
-    }
-
-    for (size_t i = 0; i < protac_->getNumAtoms(); ++i) {
-        if (std::find(match_01_indices.begin(), match_01_indices.end(), i) 
-            == match_01_indices.end()) {
-            RDKit::Atom* atom = protac_->getAtomWithIdx(i);
-            // 跳过氢原子
-            if (atom->getAtomicNum() == 1) continue;            
-            // 获取Gasteiger电荷
-            double gasteiger_charge = 0.0;
-            if (atom->hasProp("_GasteigerCharge")) {
-                atom->getProp("_GasteigerCharge", gasteiger_charge);
-            }
-            
-            double gasteiger_h_charge = 0.0;
-            if (atom->hasProp("_GasteigerHCharge")) {
-                atom->getProp("_GasteigerHCharge", gasteiger_h_charge);
-            }
-            
-            double total_charge = gasteiger_charge + gasteiger_h_charge;
-            // 确定氢键类型
-            int hb_type = 0;
-            bool is_acceptor = std::find(hb_acceptors.begin(), hb_acceptors.end(), i) != hb_acceptors.end();
-            bool is_donor = std::find(hb_donors.begin(), hb_donors.end(), i) != hb_donors.end();
-            
-            if (is_donor) hb_type = 2;  
-            if (is_acceptor) hb_type = 3; // 如果同时是供体和受体，优先设为受体
-            
-            // 添加到q_anchor列表，使用nullptr代替Python的None
-            q_anchor_.push_back(std::make_tuple(i, total_charge, hb_type)); // q_anchor包括了anchor和linker的部分
-        }
     }
     
     // 对齐锚定warhead w_anch
@@ -430,36 +397,99 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
     //MiniFixAtomTor(*protac_, AnchMatchedIDInProtac, idx_); 
     optimizeH(*protac_, 100.0);
     conf_protac = protac_->getConformer();
-    // 计算不在match_02中的原子的电荷
-    std::vector<int> match_02_indices;
-    for (const auto& pair : match_02) {
-        match_02_indices.push_back(pair.second);
-    }
-
+    
+    // 所有分子对齐完成后重新计算Gasteiger电荷（匹配Python版本的时机）
+//    RDKit::computeGasteigerCharges(*protac_);
+    
+    // 首先计算q_anchor：不在match_01中的原子（只包含重原子）
     for (size_t i = 0; i < protac_->getNumAtoms(); ++i) {
-        if (std::find(match_02_indices.begin(), match_02_indices.end(), i) 
-            == match_02_indices.end()) {
+        if (std::find(match_01_indices.begin(), match_01_indices.end(), i) 
+            == match_01_indices.end()) {
             RDKit::Atom* atom = protac_->getAtomWithIdx(i);
-            // 跳过氢原子
+            // 跳过氢原子，只处理重原子（匹配Python版本）
             if (atom->getAtomicNum() == 1) continue;
+            
             // 获取Gasteiger电荷
             double gasteiger_charge = 0.0;
             if (atom->hasProp("_GasteigerCharge")) {
                 atom->getProp("_GasteigerCharge", gasteiger_charge);
             }
-            double gasteiger_h_charge = 0.0;
-            if (atom->hasProp("_GasteigerHCharge")) {
-                atom->getProp("_GasteigerHCharge", gasteiger_h_charge);
-            }
-            double total_charge = gasteiger_charge + gasteiger_h_charge;
-            // 确定氢键类型
-            int hb_type = 0;
-            bool is_acceptor = std::find(hb_acceptors.begin(), hb_acceptors.end(), i) != hb_acceptors.end();
-            bool is_donor = std::find(hb_donors.begin(), hb_donors.end(), i) != hb_donors.end();
             
-            if (is_donor) hb_type = 2;  
-            if (is_acceptor) hb_type = 3; // 如果同时是供体和受体，优先设为受体            
+            // 手动累加连接氢原子的电荷
+            double hydrogen_charges = 0.0;
+            auto [nbrIdx, endNbrs] = protac_->getAtomNeighbors(atom);
+            while (nbrIdx != endNbrs) {
+                RDKit::Atom* neighbor = protac_->getAtomWithIdx(*nbrIdx);
+                if (neighbor->getAtomicNum() == 1) {  // 氢原子
+                    double h_charge = 0.0;
+                    if (neighbor->hasProp("_GasteigerCharge")) {
+                        neighbor->getProp("_GasteigerCharge", h_charge);
+                        hydrogen_charges += h_charge;
+                    }
+                }
+                ++nbrIdx;
+            }
+            
+            double total_charge = gasteiger_charge + hydrogen_charges;
+            // 确定氢键类型 - 使用前面计算的氢键信息
+            std::optional<int> hb_type = std::nullopt;
+            if (std::find(hb_donors.begin(), hb_donors.end(), i) != hb_donors.end()) {
+                hb_type = 3;  // 氢键供体设为3（与protein.cpp一致）
+            } else if (std::find(hb_acceptors.begin(), hb_acceptors.end(), i) != hb_acceptors.end()) {
+                hb_type = 2;  // 氢键受体设为2（与protein.cpp一致）
+            }
+            
+            // 添加到q_anchor列表
+            hb_type = std::nullopt;
+            q_anchor_.push_back(std::make_tuple(i, total_charge, hb_type));
+        }
+    }
+    
+    // 然后计算q_flex：不在match_02中的原子（只包含重原子）
+    std::vector<int> match_02_indices;
+    for (const auto& pair : match_02) {
+        match_02_indices.push_back(pair.second);
+    }
+    
+    for (size_t i = 0; i < protac_->getNumAtoms(); ++i) {
+        if (std::find(match_02_indices.begin(), match_02_indices.end(), i) 
+            == match_02_indices.end()) {
+            RDKit::Atom* atom = protac_->getAtomWithIdx(i);
+            // 跳过氢原子，只处理重原子（匹配Python版本）
+            if (atom->getAtomicNum() == 1) continue;
+            
+            // 获取Gasteiger电荷
+            double gasteiger_charge = 0.0;
+            if (atom->hasProp("_GasteigerCharge")) {
+                atom->getProp("_GasteigerCharge", gasteiger_charge);
+            }
+            
+            // 手动累加连接氢原子的电荷
+            double hydrogen_charges = 0.0;
+            auto [nbrIdx, endNbrs] = protac_->getAtomNeighbors(atom);
+            while (nbrIdx != endNbrs) {
+                RDKit::Atom* neighbor = protac_->getAtomWithIdx(*nbrIdx);
+                if (neighbor->getAtomicNum() == 1) {  // 氢原子
+                    double h_charge = 0.0;
+                    if (neighbor->hasProp("_GasteigerCharge")) {
+                        neighbor->getProp("_GasteigerCharge", h_charge);
+                        hydrogen_charges += h_charge;
+                    }
+                }
+                ++nbrIdx;
+            }
+            
+            double total_charge = gasteiger_charge + hydrogen_charges;
+            // 确定氢键类型 - 使用前面计算的氢键信息
+            std::optional<int> hb_type = std::nullopt;
+            if (std::find(hb_donors.begin(), hb_donors.end(), i) != hb_donors.end()) {
+                hb_type = 3;  // 氢键供体
+            } else if (std::find(hb_acceptors.begin(), hb_acceptors.end(), i) != hb_acceptors.end()) {
+                hb_type = 2;  // 氢键受体
+            }
+            
             // 添加到q_flex列表
+            hb_type = std::nullopt;
             q_flex_.push_back(std::make_tuple(i, total_charge, hb_type));
         }
     }
@@ -582,9 +612,8 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
     std::cout << "Processing FF parameters..." << std::endl;
     list(warheads, rbond, verbose);
     //protac_ = MinimizeH(*protac_, 15.0, false);
-    // 计算参考内部能量
-    //E_intra_ref_ = e_intra(protac_.get());
-    E_intra_ref_ = e_intra(static_cast<const RDKit::ROMol*>(&protac_ini_H));
+    // 计算参考内部能量（基于经过两次对齐和优化的构象）
+    E_intra_ref_ = e_intra(protac_.get());
     std::cout << "E_intra_ref: " << E_intra_ref_ << std::endl;
     // I want to check the linker atoms 
     if(verbose > 0 ){
@@ -738,10 +767,11 @@ void Protac::list(const std::vector<int>& warheads, const std::vector<std::pair<
                 }
                 
                 // 打印VdW参数
+                /*
                 if (print_info) {
-                    /*
+                    
                     std::cout << std::fixed << std::setprecision(6)
-                              << "VdW: atoms=" << i << "-" << j 
+                              << "VdW_params: atoms=" << i << "-" << j 
                               << " epsilon=" << param.param1 
                               << " R_ij_star=" << param.param1_1
                               << " param2=" << param.param2
@@ -749,9 +779,9 @@ void Protac::list(const std::vector<int>& warheads, const std::vector<std::pair<
                               << " param4=" << param.param4
                               << " param5=" << param.param5
                               << " topDist=" << topDist[i][j] << std::endl;
-                              */
+                              
                 }
-                
+                */
                 list_vdw_.push_back(param);
             }
         }
@@ -787,17 +817,19 @@ void Protac::list(const std::vector<int>& warheads, const std::vector<std::pair<
                                                                   torsionParams)) {
 
                                 // 打印扭转参数
+                                /*
                                 if(print_info){
-                                    /*
+                                    
                                     std::cout << std::fixed << std::setprecision(6)
-                                              << "Dihe: atoms=" 
+                                              << "Dihe_params: atoms=" 
                                               << a->getIdx() << "-" << bond.first << "-" 
                                               << bond.second << "-" << b->getIdx() 
                                               << " V1=" << torsionParams.V1 
                                               << " V2=" << torsionParams.V2 
                                               << " V3=" << torsionParams.V3 << std::endl;
-                                              */
-                                }
+                                              
+                                }*/
+
                                 DihedralParam param;
                                 param.atom1_idx = a->getIdx();
                                 param.atom2_idx = bond.first;
@@ -1425,7 +1457,8 @@ double Protac::e_intra(const RDKit::ROMol* mol) const {
         double term1_pow = std::pow(term1, 7);
         double term2 = p.param4 / (std::pow(dist, 7) + p.param5);
         double result = term1_pow * (term2 - 2.0);
-        vdw += p.param1 * result;
+        //std::cout << "[VDW]: " << p.param1 * result << ": " << p.atom1_idx << "-" << p.atom2_idx << " " << dist << std::endl;
+        vdw += (p.param1 * result > 3.0) ? 3.0 : p.param1 * result;
     }
     double dihe = 0.0;
     for (const auto& d : list_dihe_) {
@@ -1515,19 +1548,10 @@ double Protac::thread_safe_score(const std::vector<double>& dihe, RDKit::ROMol* 
             positions[std::get<0>(q).value()].z
         });
     }
-    
-    Coords aligned_coors = Align2(coors_anchor, ref, coord_subs_var, translation_);
+        
+    Coords aligned_coors = Align2(coors_anchor, coord_subs_var, ref, translation_);
     e_flex = GetGridEn(grid_flex_, aligned_coors, q_anchor_);
 
-    /* //print energy infomation or not 
-    if (print_info) { 
-        std::cout << std::fixed << std::setprecision(2)
-                  << "e_in: " << e_in 
-                  << " e_anchor: " << e_anchor 
-                  << " e_pp: " << e_pp 
-                  << " e_flex: " << e_flex << std::endl;
-    }
-    */
     return e_in + e_anchor + e_pp + e_flex;
 }
 
@@ -1577,6 +1601,186 @@ void Protac::printProtacInfo(){
         std::cout << "    " << dihedral[3] << ": (" << p4.x << ", " << p4.y << ", " << p4.z << ")" << std::endl;
         std::cout << " END PRINT PROTAC INFO"<< std::endl;
     }
+}
+
+// 新增score_only功能实现
+double Protac::score_only(bool verbose) {
+    // 对当前分子构象进行评分，不改变二面角
+    RDKit::ROMol mol_copy(*protac_);
+    
+    // 获取当前二面角值
+    const RDKit::Conformer& conf = protac_->getConformer();
+    std::vector<double> current_dihedrals;
+    current_dihedrals.reserve(rot_dihe_.size());
+    for (size_t i = 0; i < rot_dihe_.size(); ++i) {
+        const auto& atoms = rot_dihe_[i];
+        double angle = MolTransforms::getDihedralDeg(conf, atoms[0], atoms[1], atoms[2], atoms[3]);
+        current_dihedrals.push_back(angle);
+    }
+    
+    double total_energy = thread_safe_score(current_dihedrals, &mol_copy, true);
+    
+    if (verbose) {
+        std::cout << "\n=== Score Only Mode ===" << std::endl;
+        std::cout << "Evaluating current PROTAC conformation..." << std::endl;
+        
+        std::cout << "Current dihedral angles:" << std::endl;
+        for (size_t i = 0; i < rot_dihe_.size(); ++i) {
+            const auto& atoms = rot_dihe_[i];
+            std::cout << "  Dihedral " << i << " [" << atoms[0] << "-" << atoms[1] 
+                      << "-" << atoms[2] << "-" << atoms[3] << "]: " 
+                      << std::fixed << std::setprecision(2) << current_dihedrals[i] << "°" << std::endl;
+        }
+        
+        // 计算各能量组分
+        std::cout << "\nEnergy components:" << std::endl;
+        
+        // 分子内能量
+        double e_in = e_intra(protac_.get()) - E_intra_ref_;
+        if (e_in > paras["ub_strain"]) {
+            e_in = paras["ub_strain"];
+        }
+        std::cout << "  Intramolecular energy (strain): " << std::fixed << std::setprecision(3) << e_in << " kcal/mol" << std::endl;
+        
+        // 获取所有protac原子位置
+        std::vector<RDGeom::Point3D> positions;
+        positions.reserve(protac_->getNumAtoms());
+        for (size_t i = 0; i < protac_->getNumAtoms(); ++i) {
+            positions.push_back(conf.getAtomPos(i));
+        }
+        
+        // q_flex与锚定蛋白的相互作用能
+        Coords coors_flex;
+        for (const auto& q : q_flex_) {
+            coors_flex.push_back({
+                positions[std::get<0>(q).value()].x,
+                positions[std::get<0>(q).value()].y,
+                positions[std::get<0>(q).value()].z
+            });
+        }
+        double e_anchor = GetGridEn(grid_anchor_, coors_flex, q_flex_);
+        std::cout << "  Flexible warhead - Anchor protein: " << std::fixed << std::setprecision(3) << e_anchor << " kcal/mol" << std::endl;
+        
+        // 蛋白质-蛋白质相互作用
+        Coords ref;
+        for (int idx : idx_) {
+            const auto& pos = positions[idx];
+            ref.push_back({pos.x, pos.y, pos.z});
+        }
+        Coords coords_pro = Align(protein_.coords, coord_subs_var, ref);
+        double e_pp = GetGridEn(grid_anchor_, coords_pro, protein_.para);
+        std::cout << "  Protein-protein interaction: " << std::fixed << std::setprecision(3) << e_pp << " kcal/mol" << std::endl;
+        
+        // q_anchor与柔性蛋白的相互作用能
+        Coords coors_anchor;
+        for (const auto& q : q_anchor_) {
+            coors_anchor.push_back({
+                positions[std::get<0>(q).value()].x,
+                positions[std::get<0>(q).value()].y,
+                positions[std::get<0>(q).value()].z
+            });
+        }
+        Coords aligned_coors = Align2(coors_anchor, coord_subs_var, ref, translation_);
+        double e_flex = GetGridEn(grid_flex_, aligned_coors, q_anchor_);
+        std::cout << "  Anchor warhead - Flexible protein: " << std::fixed << std::setprecision(3) << e_flex << " kcal/mol" << std::endl;
+        
+        std::cout << "  ------------------------" << std::endl;
+        std::cout << "  Total energy: " << std::fixed << std::setprecision(3) << total_energy << " kcal/mol" << std::endl;
+        std::cout << "=======================" << std::endl;
+    }
+    
+    return total_energy;
+}
+
+double Protac::score_only(const std::vector<double>& dihe, bool verbose) {
+    if (dihe.size() != rot_dihe_.size()) {
+        throw std::runtime_error("Dihedral vector size (" + std::to_string(dihe.size()) + 
+                               ") does not match number of rotatable dihedrals (" + 
+                               std::to_string(rot_dihe_.size()) + ")");
+    }
+    
+    // 创建分子副本并设置指定的二面角
+    RDKit::ROMol mol_copy(*protac_);
+    RDKit::Conformer& conf = mol_copy.getConformer();
+    
+    // 设置用户指定的二面角
+    for (size_t j = 0; j < rot_dihe_.size(); ++j) {
+        const auto& atoms = rot_dihe_[j];
+        MolTransforms::setDihedralDeg(conf, atoms[0], atoms[1], atoms[2], atoms[3], dihe[j]);
+    }
+    
+    double total_energy = thread_safe_score(dihe, &mol_copy, true);
+    
+    if (verbose) {
+        std::cout << "\n=== Score Only Mode (Custom Dihedrals) ===" << std::endl;
+        std::cout << "Evaluating PROTAC with specified dihedral angles..." << std::endl;
+        
+        std::cout << "Specified dihedral angles:" << std::endl;
+        for (size_t i = 0; i < rot_dihe_.size(); ++i) {
+            const auto& atoms = rot_dihe_[i];
+            std::cout << "  Dihedral " << i << " [" << atoms[0] << "-" << atoms[1] 
+                      << "-" << atoms[2] << "-" << atoms[3] << "]: " 
+                      << std::fixed << std::setprecision(2) << dihe[i] << "°" << std::endl;
+        }
+        
+        // 计算各能量组分（重新计算基于新构象）
+        std::cout << "\nEnergy components:" << std::endl;
+        
+        // 获取所有protac原子位置
+        std::vector<RDGeom::Point3D> positions;
+        positions.reserve(mol_copy.getNumAtoms());
+        for (size_t i = 0; i < mol_copy.getNumAtoms(); ++i) {
+            positions.push_back(conf.getAtomPos(i));
+        }
+        
+        // 分子内能量
+        double e_in = e_intra(&mol_copy) - E_intra_ref_;
+        if (e_in > paras["ub_strain"]) {
+            e_in = paras["ub_strain"];
+        }
+        std::cout << "  Intramolecular energy (strain): " << std::fixed << std::setprecision(3) << e_in << " kcal/mol" << std::endl;
+        
+        // q_flex与锚定蛋白的相互作用能
+        Coords coors_flex;
+        for (const auto& q : q_flex_) {
+            coors_flex.push_back({
+                positions[std::get<0>(q).value()].x,
+                positions[std::get<0>(q).value()].y,
+                positions[std::get<0>(q).value()].z
+            });
+        }
+        double e_anchor = GetGridEn(grid_anchor_, coors_flex, q_flex_);
+        std::cout << "  Flexible warhead - Anchor protein: " << std::fixed << std::setprecision(3) << e_anchor << " kcal/mol" << std::endl;
+        
+        // 蛋白质-蛋白质相互作用
+        Coords ref;
+        for (int idx : idx_) {
+            const auto& pos = positions[idx];
+            ref.push_back({pos.x, pos.y, pos.z});
+        }
+        Coords coords_pro = Align(protein_.coords, coord_subs_var, ref);
+        double e_pp = GetGridEn(grid_anchor_, coords_pro, protein_.para);
+        std::cout << "  Protein-protein interaction: " << std::fixed << std::setprecision(3) << e_pp << " kcal/mol" << std::endl;
+        
+        // q_anchor与柔性蛋白的相互作用能
+        Coords coors_anchor;
+        for (const auto& q : q_anchor_) {
+            coors_anchor.push_back({
+                positions[std::get<0>(q).value()].x,
+                positions[std::get<0>(q).value()].y,
+                positions[std::get<0>(q).value()].z
+            });
+        }
+        Coords aligned_coors = Align2(coors_anchor, coord_subs_var, ref, translation_);
+        double e_flex = GetGridEn(grid_flex_, aligned_coors, q_anchor_);
+        std::cout << "  Anchor warhead - Flexible protein: " << std::fixed << std::setprecision(3) << e_flex << " kcal/mol" << std::endl;
+        
+        std::cout << "  ------------------------" << std::endl;
+        std::cout << "  Total energy: " << std::fixed << std::setprecision(3) << total_energy << " kcal/mol" << std::endl;
+        std::cout << "=======================" << std::endl;
+    }
+    
+    return total_energy;
 }
 
 

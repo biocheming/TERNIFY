@@ -8,7 +8,7 @@ std::map<std::string, double> paras = {
     {"dist_clash", 2.4},
     {"lb_hbond_dist", 2.6},
     {"ub_hbond_dist", 3.8},
-    {"grid_space", 0.5},
+    {"grid_space", 0.3}, // 0.3 for py3 version
     {"rmin_6", std::pow(3.6, 6)},  // 1.9*2
     {"eps", 0.1},
     {"elec_scaling", 332 * 0.2},   // 1.0
