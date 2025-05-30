@@ -18,7 +18,8 @@ Matrix3d Kabsch(const std::vector<std::array<double, 3>>& coord_var,
         throw std::invalid_argument("Kabsch Search Error: the number of atoms is not equal or empty.");
         exit(EXIT_FAILURE);
     }
-    // 计算协方差矩阵
+    // Python: covar = np.dot(coord_var.T, coord_ref)
+    // 直接计算协方差矩阵，不进行质心化（调用者负责质心化）
     MatrixXd covar = MatrixXd::Zero(3, 3);
     for (size_t i = 0; i < coord_var.size(); ++i) {
         covar += Map<const Vector3d>(coord_var[i].data()) * 
@@ -41,42 +42,56 @@ Matrix3d Kabsch(const std::vector<std::array<double, 3>>& coord_var,
 std::vector<std::array<double, 3>> Align(const std::vector<std::array<double, 3>>& coords,
                                          const std::vector<std::array<double, 3>>& coord_subs_var,
                                          const std::vector<std::array<double, 3>>& coord_ref) {
-    // 计算质心
-    Vector3d centroid_subs_var = Vector3d::Zero();
-    Vector3d centroid_ref = Vector3d::Zero();
-
-    for (const auto& point : coord_subs_var) {
-        centroid_subs_var += Map<const Vector3d>(point.data());
-    }
-    centroid_subs_var /= coord_subs_var.size();
-
+    // Python: center = coord_ref.mean(axis=0)
+    Vector3d center = Vector3d::Zero();
     for (const auto& point : coord_ref) {
-        centroid_ref += Map<const Vector3d>(point.data());
+        center += Map<const Vector3d>(point.data());
     }
-    centroid_ref /= coord_ref.size();
+    center /= coord_ref.size();
 
-    // 将coord_subs_var和coord_ref移到原点
-    std::vector<std::array<double, 3>> centered_subs_var, centered_ref;
-    for (const auto& point : coord_subs_var) {
-        Vector3d centered = Map<const Vector3d>(point.data()) - centroid_subs_var;
-        centered_subs_var.push_back({centered.x(), centered.y(), centered.z()});
-    }
+    // Python: coord_ref = coord_ref - center
+    std::vector<std::array<double, 3>> centered_ref;
     for (const auto& point : coord_ref) {
-        Vector3d centered = Map<const Vector3d>(point.data()) - centroid_ref;
+        Vector3d centered = Map<const Vector3d>(point.data()) - center;
         centered_ref.push_back({centered.x(), centered.y(), centered.z()});
     }
 
-    // 计算旋转矩阵（从coord_subs_var到coord_ref）
-    Matrix3d R = Kabsch(centered_subs_var, centered_ref);
+    // 检查coord_subs_var是否已经质心化
+    Vector3d center_subs_var = Vector3d::Zero();
+    for (const auto& point : coord_subs_var) {
+        center_subs_var += Map<const Vector3d>(point.data());
+    }
+    center_subs_var /= coord_subs_var.size();
+    
+    // 如果coord_subs_var已经质心化（质心接近0），则直接使用，否则质心化
+    bool is_centered = (center_subs_var.norm() < 1e-10);
+    
+    // Python: R = Kabsch(coord_subs_var, coord_ref)
+    Matrix3d R;
+    if (is_centered) {
+        // coord_subs_var已经质心化，直接使用
+        R = Kabsch(coord_subs_var, centered_ref);
+    } else {
+        // coord_subs_var未质心化，需要质心化后使用
+        std::vector<std::array<double, 3>> centered_subs_var;
+        for (const auto& point : coord_subs_var) {
+            Vector3d centered = Map<const Vector3d>(point.data()) - center_subs_var;
+            centered_subs_var.push_back({centered.x(), centered.y(), centered.z()});
+        }
+        R = Kabsch(centered_subs_var, centered_ref);
+    }
 
-    // 计算平移向量
-    //Vector3d translation = centroid_ref - centroid_subs_var;
-
-    // 将蛋白质坐标相对于coord_subs_var进行变换
+    // Python: coords = np.dot(coords, R) + center
     std::vector<std::array<double, 3>> aligned_coords;
     for (const auto& point : coords) {
-        // 使用旋转矩阵的转置（逆）来保持相对方向
-        Vector3d transformed = R.transpose() * (Map<const Vector3d>(point.data()) - centroid_subs_var) + centroid_ref;
+        Vector3d coord_point = Map<const Vector3d>(point.data());
+        if (!is_centered) {
+            // 如果coord_subs_var原本未质心化，需要先减去其质心
+            coord_point -= center_subs_var;
+        }
+        // Python的np.dot(coords, R)等价于R * coords（当coords为列向量时）
+        Vector3d rotated = R * coord_point;
+        Vector3d transformed = rotated + center;
         aligned_coords.push_back({transformed.x(), transformed.y(), transformed.z()});
     }
 
@@ -84,35 +99,35 @@ std::vector<std::array<double, 3>> Align(const std::vector<std::array<double, 3>
 }
 
 std::vector<std::array<double, 3>> Align2(const std::vector<std::array<double, 3>>& coords,
-                                          const std::vector<std::array<double, 3>>& coord_subs_var,
                                           const std::vector<std::array<double, 3>>& coord_ref,
+                                          const std::vector<std::array<double, 3>>& coord_subs_var,
                                           const std::array<double, 3>& translation) {
-    // 计算原点位置的质心
+    // Python: center = coord_subs_var.mean(axis=0)
     Vector3d center = Vector3d::Zero();
     for (const auto& point : coord_subs_var) {
         center += Map<const Vector3d>(point.data());
     }
     center /= coord_subs_var.size();
 
-    // 将coord_subs_var相对于质心
+    // Python: coord_subs_var = coord_subs_var - center
     std::vector<std::array<double, 3>> centered_subs_var;
     for (const auto& point : coord_subs_var) {
         Vector3d centered = Map<const Vector3d>(point.data()) - center;
         centered_subs_var.push_back({centered.x(), centered.y(), centered.z()});
     }
 
-    // 计算从原点位置到当前位置的旋转矩阵
+    // Python: R = Kabsch(coord_subs_var, coord_ref)
     Matrix3d R = Kabsch(centered_subs_var, coord_ref);
     Vector3d trans_vec = Map<const Vector3d>(translation.data());
     
-    // 对coords应用相同的变换
+    // Python: coords = coords - center; coords = np.dot(coords, R) + translation
     std::vector<std::array<double, 3>> aligned_coords;
     for (const auto& point : coords) {
-        // 1. 相对于原点位置的质心
+        // Python: coords = coords - center
         Vector3d centered = Map<const Vector3d>(point.data()) - center;
-        // 2. 应用旋转（左乘R）
-        Vector3d rotated = R * centered;  // 修改：改为左乘
-        // 3. 加上translation
+        // Python: coords = np.dot(coords, R) + translation
+        // Python的np.dot(coords, R)等价于R * coords（当coords为列向量时）
+        Vector3d rotated = R * centered;
         Vector3d transformed = rotated + trans_vec;
         aligned_coords.push_back({transformed.x(), transformed.y(), transformed.z()});
     }

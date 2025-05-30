@@ -9,10 +9,3 @@ double GetGridEn(
     const GRID& grid,
     const Coords& coords,
     const std::vector<IQHb>& q);
-
-/*
-struct GridEnergyResult {
-    double energy;  // 总能量 (vdw + ele + hb)
-    std::vector<std::array<double, 3>> derivatives;  // 总能量对坐标的导数
-};
-*/

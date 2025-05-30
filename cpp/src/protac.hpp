@@ -54,6 +54,17 @@ public:
     double e_intra(const RDKit::ROMol* mol) const;
     double score(const std::vector<double>& dihe);
     
+    // 新增score_only功能
+    double score_only(bool verbose = false);
+    double score_only(const std::vector<double>& dihe, bool verbose = false);
+    
+    // 公有访问器方法
+    const std::shared_ptr<RDKit::ROMol>& getProtac() const { return protac_; }
+    const std::vector<std::array<int, 4>>& getRotatableDihedrals() const { return rot_dihe_; }
+    std::vector<Solution>& getSolutions() { return solutions_; }
+    void clearSolutions() { solutions_.clear(); }
+    void addSolution(const Solution& solution) { solutions_.push_back(solution); }
+    
     void output(RDKit::SDWriter& w, 
                 std::ostream& fpro, 
                 int nKeep,
