@@ -1,7 +1,7 @@
 # TERNIFY: Efficient Sampling of PROTAC-Induced Ternary Complexes
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2025.05.29-green.svg)]()
+[![Version](https://img.shields.io/badge/version-2025.05.30-green.svg)]()
 
 TERNIFY is a high-performance C++ implementation for efficient sampling and prediction of PROTAC-induced ternary complex structures. It uses advanced molecular modeling techniques to predict how PROTAC molecules bring together E3 ligases and target proteins to form productive ternary complexes.
 
@@ -95,7 +95,7 @@ make -j 8
 
 # Optional: Install globally
 sudo cp ternify /usr/local/bin
-#=======
+=======
 # Run ternify
 ```
 
@@ -152,6 +152,9 @@ N_processes: 8        # Number of CPU threads
 RMSD_cutoff: 1.0      # RMSD threshold for clustering (Å)
 Verbose: 1            # Verbose level (0=quiet, 1=detailed)
 
+# Score_only mode (align to poi.sdf and e3.sdf,optimize H,then scoring )
+Score_only: 0
+
 # Interface definition (x_min, x_max, y_min, y_max, z_min, z_max)
 Interface: -15.0, 15.0, -15.0, 15.0, -15.0, 15.0
 ```
@@ -199,12 +202,12 @@ Interface: -15.0, 15.0, -15.0, 15.0, -15.0, 15.0
 
 TERNIFY calculates the following energy terms:
 
-- $ E_{intra} $ : Intramolecular PROTAC energy (VdW + torsional)
-- $ E_{anchor} $ : PROTAC-anchor protein interaction
-- $ E_{flex} $ : PROTAC-flexible protein interaction
-- $ E_{pp} $ : Protein-protein interaction energy
+- **E_intra**: Intramolecular PROTAC energy (VdW + torsional)
+- **E_anchor**: PROTAC-anchor protein interaction
+- **E_flex**: PROTAC-flexible protein interaction
+- **E_pp**: Protein-protein interaction energy
 
-$$ E_{total} = E_{intra} + E_{anchor} + E_{flex} + E_{pp} $$
+Total Energy = E_intra + E_anchor + E_flex + E_pp
 
 ## Performance Tips
 
