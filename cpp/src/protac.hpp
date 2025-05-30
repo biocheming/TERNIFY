@@ -28,6 +28,9 @@
 
 class Protac {
 public:
+    // 构造函数
+    Protac(int processes = 1);
+    
     // 内部结构体定义
     struct Solution {
         std::vector<double> dihedrals;
@@ -43,7 +46,6 @@ public:
               RDKit::ROMol* w_anch,
               RDKit::ROMol* w_flex,
               const std::string& fpro_flex,
-              int processes,
               const GRID& grid_anchor,
               const GRID& grid_flex,
               bool verbose = false);
@@ -93,6 +95,10 @@ private:
     std::array<double, 3> translation_;
     std::vector<int> warhead_atoms_;  // 存储弹头原子的索引，用于RMSD计算
     
+    // 新增：保存anchor warhead对齐信息
+    std::vector<std::pair<int, RDGeom::Point3D>> anchor_atom_positions_;  // 保存anchor warhead原子的目标位置
+    std::vector<int> anchor_warhead_atoms_;  // 保存anchor warhead原子的索引
+    
     struct VdwParam {
         int atom1_idx;
         int atom2_idx;
@@ -121,9 +127,31 @@ private:
     void list(const std::vector<int>& warheads, 
               const std::vector<std::pair<int, int>>& rbond,
               bool print_info = false);
+    
+    // 对齐相关的私有函数
+    void alignProtacToFlexWarhead(RDKit::ROMol* w_flex, bool verbose = false);
+    void alignProtacToAnchorWarhead(RDKit::ROMol* w_anch, bool verbose = false);
+    
+    // 可旋转键和二面角查找函数
+    void findRotatableDihedrals(const std::vector<int>& linker, bool verbose = false);
+    
+    // 电荷和氢键类型计算函数
+    void calculateQAnchor(const std::vector<int>& hb_donors, const std::vector<int>& hb_acceptors, bool verbose = false);
+    void calculateQFlex(const std::vector<int>& hb_donors, const std::vector<int>& hb_acceptors, bool verbose = false);
+    
+    // 氢键供受体识别函数
+    std::pair<std::vector<int>, std::vector<int>> findHB_DA(bool verbose = false);
+    
+    // 坐标系统设置函数
+    void setupCoordinateSystem(RDKit::ROMol* w_flex, const std::string& fpro_flex, bool verbose = false);
+    
+    // Linker原子识别函数
+    std::vector<int> findLinkerAtoms(bool verbose = false);
+    
     // 扫描单个二面角的低能构象
     std::vector<double> scanTorsion(double v1, double v2, double v3);
     std::vector<double> listTorsion(double grid_step);
+    
     // 随机数生成器
     std::mt19937 rng_;
     std::uniform_real_distribution<double> angle_dist_;
