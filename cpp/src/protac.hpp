@@ -148,6 +148,12 @@ private:
     // Linker原子识别函数
     std::vector<int> findLinkerAtoms(bool verbose = false);
     
+    // 能量组分详细输出的辅助函数
+    void printEnergyComponents(const RDKit::ROMol& mol, 
+                              const std::vector<double>& dihedrals, 
+                              double total_energy, 
+                              bool is_custom_dihedrals);
+    
     // 扫描单个二面角的低能构象
     std::vector<double> scanTorsion(double v1, double v2, double v3);
     std::vector<double> listTorsion(double grid_step);

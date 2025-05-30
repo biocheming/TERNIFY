@@ -52,7 +52,6 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
     
     // 获取构象
     RDKit::Conformer& conf_protac = protac_->getConformer();        //protac whole part
-    const RDKit::Conformer& conf_flex = w_flex->getConformer();
 
     // 设置坐标系统和读取蛋白质
     setupCoordinateSystem(w_flex, fpro_flex, verbose);
@@ -1090,72 +1089,7 @@ double Protac::score_only(bool verbose) {
     double total_energy = thread_safe_score(current_dihedrals, &mol_copy, true);
     
     if (verbose) {
-        std::cout << "\n=== Score Only Mode ===" << std::endl;
-        std::cout << "Evaluating current PROTAC conformation..." << std::endl;
-        
-        std::cout << "Current dihedral angles:" << std::endl;
-        for (size_t i = 0; i < rot_dihe_.size(); ++i) {
-            const auto& atoms = rot_dihe_[i];
-            std::cout << "  Dihedral " << i << " [" << atoms[0] << "-" << atoms[1] 
-                      << "-" << atoms[2] << "-" << atoms[3] << "]: " 
-                      << std::fixed << std::setprecision(2) << current_dihedrals[i] << "°" << std::endl;
-        }
-        
-        // 计算各能量组分
-        std::cout << "\nEnergy components:" << std::endl;
-        
-        // 分子内能量
-        double e_in = e_intra(protac_.get()) - E_intra_ref_;
-        if (e_in > paras["ub_strain"]) {
-            e_in = paras["ub_strain"];
-        }
-        std::cout << "  Intramolecular energy (strain): " << std::fixed << std::setprecision(3) << e_in << " kcal/mol" << std::endl;
-        
-        // 获取所有protac原子位置
-        std::vector<RDGeom::Point3D> positions;
-        positions.reserve(protac_->getNumAtoms());
-        for (size_t i = 0; i < protac_->getNumAtoms(); ++i) {
-            positions.push_back(conf.getAtomPos(i));
-        }
-        
-        // q_flex与锚定蛋白的相互作用能
-        Coords coors_flex;
-        for (const auto& q : q_flex_) {
-            coors_flex.push_back({
-                positions[std::get<0>(q).value()].x,
-                positions[std::get<0>(q).value()].y,
-                positions[std::get<0>(q).value()].z
-            });
-        }
-        double e_anchor = GetGridEn(grid_anchor_, coors_flex, q_flex_);
-        std::cout << "  Flexible warhead - Anchor protein: " << std::fixed << std::setprecision(3) << e_anchor << " kcal/mol" << std::endl;
-        
-        // 蛋白质-蛋白质相互作用
-        Coords ref;
-        for (int idx : idx_) {
-            const auto& pos = positions[idx];
-            ref.push_back({pos.x, pos.y, pos.z});
-        }
-        Coords coords_pro = Align(protein_.coords, coord_subs_var, ref);
-        double e_pp = GetGridEn(grid_anchor_, coords_pro, protein_.para);
-        std::cout << "  Protein-protein interaction: " << std::fixed << std::setprecision(3) << e_pp << " kcal/mol" << std::endl;
-        
-        // q_anchor与柔性蛋白的相互作用能
-        Coords coors_anchor;
-        for (const auto& q : q_anchor_) {
-            coors_anchor.push_back({
-                positions[std::get<0>(q).value()].x,
-                positions[std::get<0>(q).value()].y,
-                positions[std::get<0>(q).value()].z
-            });
-        }
-        Coords aligned_coors = Align2(coors_anchor, coord_subs_var, ref, translation_);
-        double e_flex = GetGridEn(grid_flex_, aligned_coors, q_anchor_);
-        std::cout << "  Anchor warhead - Flexible protein: " << std::fixed << std::setprecision(3) << e_flex << " kcal/mol" << std::endl;
-        
-        std::cout << "  ------------------------" << std::endl;
-        std::cout << "  Total energy: " << std::fixed << std::setprecision(3) << total_energy << " kcal/mol" << std::endl;
-        std::cout << "=======================" << std::endl;
+        printEnergyComponents(mol_copy, current_dihedrals, total_energy, false);
     }
     
     return total_energy;
@@ -1181,72 +1115,7 @@ double Protac::score_only(const std::vector<double>& dihe, bool verbose) {
     double total_energy = thread_safe_score(dihe, &mol_copy, true);
     
     if (verbose) {
-        std::cout << "\n=== Score Only Mode (Custom Dihedrals) ===" << std::endl;
-        std::cout << "Evaluating PROTAC with specified dihedral angles..." << std::endl;
-        
-        std::cout << "Specified dihedral angles:" << std::endl;
-        for (size_t i = 0; i < rot_dihe_.size(); ++i) {
-            const auto& atoms = rot_dihe_[i];
-            std::cout << "  Dihedral " << i << " [" << atoms[0] << "-" << atoms[1] 
-                      << "-" << atoms[2] << "-" << atoms[3] << "]: " 
-                      << std::fixed << std::setprecision(2) << dihe[i] << "°" << std::endl;
-        }
-        
-        // 计算各能量组分（重新计算基于新构象）
-        std::cout << "\nEnergy components:" << std::endl;
-        
-        // 获取所有protac原子位置
-        std::vector<RDGeom::Point3D> positions;
-        positions.reserve(mol_copy.getNumAtoms());
-        for (size_t i = 0; i < mol_copy.getNumAtoms(); ++i) {
-            positions.push_back(conf.getAtomPos(i));
-        }
-        
-        // 分子内能量
-        double e_in = e_intra(&mol_copy) - E_intra_ref_;
-        if (e_in > paras["ub_strain"]) {
-            e_in = paras["ub_strain"];
-        }
-        std::cout << "  Intramolecular energy (strain): " << std::fixed << std::setprecision(3) << e_in << " kcal/mol" << std::endl;
-        
-        // q_flex与锚定蛋白的相互作用能
-        Coords coors_flex;
-        for (const auto& q : q_flex_) {
-            coors_flex.push_back({
-                positions[std::get<0>(q).value()].x,
-                positions[std::get<0>(q).value()].y,
-                positions[std::get<0>(q).value()].z
-            });
-        }
-        double e_anchor = GetGridEn(grid_anchor_, coors_flex, q_flex_);
-        std::cout << "  Flexible warhead - Anchor protein: " << std::fixed << std::setprecision(3) << e_anchor << " kcal/mol" << std::endl;
-        
-        // 蛋白质-蛋白质相互作用
-        Coords ref;
-        for (int idx : idx_) {
-            const auto& pos = positions[idx];
-            ref.push_back({pos.x, pos.y, pos.z});
-        }
-        Coords coords_pro = Align(protein_.coords, coord_subs_var, ref);
-        double e_pp = GetGridEn(grid_anchor_, coords_pro, protein_.para);
-        std::cout << "  Protein-protein interaction: " << std::fixed << std::setprecision(3) << e_pp << " kcal/mol" << std::endl;
-        
-        // q_anchor与柔性蛋白的相互作用能
-        Coords coors_anchor;
-        for (const auto& q : q_anchor_) {
-            coors_anchor.push_back({
-                positions[std::get<0>(q).value()].x,
-                positions[std::get<0>(q).value()].y,
-                positions[std::get<0>(q).value()].z
-            });
-        }
-        Coords aligned_coors = Align2(coors_anchor, coord_subs_var, ref, translation_);
-        double e_flex = GetGridEn(grid_flex_, aligned_coors, q_anchor_);
-        std::cout << "  Anchor warhead - Flexible protein: " << std::fixed << std::setprecision(3) << e_flex << " kcal/mol" << std::endl;
-        
-        std::cout << "  ------------------------" << std::endl;
-        std::cout << "  Total energy: " << std::fixed << std::setprecision(3) << total_energy << " kcal/mol" << std::endl;
-        std::cout << "=======================" << std::endl;
+        printEnergyComponents(mol_copy, dihe, total_energy, true);
     }
     
     return total_energy;
@@ -1894,6 +1763,88 @@ std::vector<int> Protac::findLinkerAtoms(bool verbose) {
     }
     
     return linker;
+}
+
+// 能量组分详细输出的辅助函数
+void Protac::printEnergyComponents(const RDKit::ROMol& mol, 
+                                   const std::vector<double>& dihedrals, 
+                                   double total_energy, 
+                                   bool is_custom_dihedrals) {
+    const RDKit::Conformer& conf = mol.getConformer();
+    
+    if (is_custom_dihedrals) {
+        std::cout << "\n=== Score Only Mode (Custom Dihedrals) ===" << std::endl;
+        std::cout << "Evaluating PROTAC with specified dihedral angles..." << std::endl;
+        std::cout << "Specified dihedral angles:" << std::endl;
+    } else {
+        std::cout << "\n=== Score Only Mode ===" << std::endl;
+        std::cout << "Evaluating current PROTAC conformation..." << std::endl;
+        std::cout << "Current dihedral angles:" << std::endl;
+    }
+    
+    // 输出二面角信息
+    for (size_t i = 0; i < rot_dihe_.size(); ++i) {
+        const auto& atoms = rot_dihe_[i];
+        std::cout << "  Dihedral " << i << " [" << atoms[0] << "-" << atoms[1] 
+                  << "-" << atoms[2] << "-" << atoms[3] << "]: " 
+                  << std::fixed << std::setprecision(2) << dihedrals[i] << "°" << std::endl;
+    }
+    
+    // 计算各能量组分
+    std::cout << "\nEnergy components:" << std::endl;
+    
+    // 获取所有protac原子位置
+    std::vector<RDGeom::Point3D> positions;
+    positions.reserve(mol.getNumAtoms());
+    for (size_t i = 0; i < mol.getNumAtoms(); ++i) {
+        positions.push_back(conf.getAtomPos(i));
+    }
+    
+    // 分子内能量
+    double e_in = e_intra(&mol) - E_intra_ref_;
+    if (e_in > paras["ub_strain"]) {
+        e_in = paras["ub_strain"];
+    }
+    std::cout << "  Intramolecular energy (strain): " << std::fixed << std::setprecision(3) << e_in << " kcal/mol" << std::endl;
+    
+    // q_flex与锚定蛋白的相互作用能
+    Coords coors_flex;
+    for (const auto& q : q_flex_) {
+        coors_flex.push_back({
+            positions[std::get<0>(q).value()].x,
+            positions[std::get<0>(q).value()].y,
+            positions[std::get<0>(q).value()].z
+        });
+    }
+    double e_anchor = GetGridEn(grid_anchor_, coors_flex, q_flex_);
+    std::cout << "  Flexible warhead - Anchor protein: " << std::fixed << std::setprecision(3) << e_anchor << " kcal/mol" << std::endl;
+    
+    // 蛋白质-蛋白质相互作用
+    Coords ref;
+    for (int idx : idx_) {
+        const auto& pos = positions[idx];
+        ref.push_back({pos.x, pos.y, pos.z});
+    }
+    Coords coords_pro = Align(protein_.coords, coord_subs_var, ref);
+    double e_pp = GetGridEn(grid_anchor_, coords_pro, protein_.para);
+    std::cout << "  Protein-protein interaction: " << std::fixed << std::setprecision(3) << e_pp << " kcal/mol" << std::endl;
+    
+    // q_anchor与柔性蛋白的相互作用能
+    Coords coors_anchor;
+    for (const auto& q : q_anchor_) {
+        coors_anchor.push_back({
+            positions[std::get<0>(q).value()].x,
+            positions[std::get<0>(q).value()].y,
+            positions[std::get<0>(q).value()].z
+        });
+    }
+    Coords aligned_coors = Align2(coors_anchor, coord_subs_var, ref, translation_);
+    double e_flex = GetGridEn(grid_flex_, aligned_coors, q_anchor_);
+    std::cout << "  Anchor warhead - Flexible protein: " << std::fixed << std::setprecision(3) << e_flex << " kcal/mol" << std::endl;
+    
+    std::cout << "  ------------------------" << std::endl;
+    std::cout << "  Total energy: " << std::fixed << std::setprecision(3) << total_energy << " kcal/mol" << std::endl;
+    std::cout << "=======================" << std::endl;
 }
 
 
