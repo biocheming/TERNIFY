@@ -50,16 +50,23 @@ std::shared_ptr<RDKit::ROMol> MinimizeH(const RDKit::ROMol& input_mol, double fo
     return mol;
 }
 
-void optimizeH(RDKit::ROMol& mol, double forceConst) {
+void optimizeH(RDKit::ROMol& mol, double forceConst, bool addH) {
     // 创建MMFF力场
+    if (addH) {
+        RDKit::MolOps::addHs(mol, false, true);
+    }
     RDKit::MMFF::MMFFMolProperties mmffProps(mol, "MMFF94s");
     if (!mmffProps.isValid()) {
         throw std::runtime_error("MMFF properties are invalid for this molecule.");
     }
     
     // 关闭VDW和静电相互作用
-    mmffProps.setMMFFVdWTerm(false);
-    mmffProps.setMMFFEleTerm(false);
+    //mmffProps.setMMFFVdWTerm(false);
+    //mmffProps.setMMFFEleTerm(false);
+    mmffProps.setMMFFDielectricConstant(4.0);
+
+    // 设置介电模型（1 表示常数介电模型）
+    mmffProps.setMMFFDielectricModel(2);
     
     // 构建力场
     std::unique_ptr<ForceFields::ForceField> ff(

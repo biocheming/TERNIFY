@@ -12,7 +12,7 @@
 
 // 返回智能指针以管理内存
 std::shared_ptr<RDKit::ROMol> MinimizeH(const RDKit::ROMol& input_mol, double forceConst = 1.0e9, bool addH_only = false);
-void optimizeH(RDKit::ROMol& mol, double forceConst = 1.0e9); 
+void optimizeH(RDKit::ROMol& mol, double forceConst = 1.0e9, bool addH = false); 
 void optimizeWithFixedAtoms(RDKit::ROMol& mol, const std::vector<int>& fixedAtoms);
 void optimizeWithConstrAtoms(RDKit::ROMol& mol, const std::vector<int>& fixedAtoms);
 void MiniFixAtomTor(RDKit::ROMol& mol, 

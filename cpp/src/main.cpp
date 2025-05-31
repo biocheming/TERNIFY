@@ -226,11 +226,13 @@ void run_ternify(const Parameters& params) {
             std::cout << "\n=== Processing PROTAC molecule " << (protac_index + 1) << " of " << total_protacs << " ===" << std::endl;
             std::cout << "READ: Number of atoms in protac: " << mol->getNumAtoms() << std::endl;
             std::cout << "READ: Number of bonds in protac: " << mol->getNumBonds() << std::endl;
+            
             if (RDKit::SubstructMatch(*mol, *w_anch).empty() || 
                 RDKit::SubstructMatch(*mol, *w_flex).empty() ){
                 std::cout << "WARNING: Skipping molecule " << protac_index + 1 << ": this protac does not match substructures with anch/flex." << std::endl;
                 continue;
             }
+            
             
             // 检查网格是否都已成功初始化
             if (!grid_anchor_initialized || !grid_flex_initialized) {
@@ -263,12 +265,11 @@ void run_ternify(const Parameters& params) {
                 }
             }
             
-            Protac PROTac;
+            Protac PROTac(*grid_anchor, *grid_flex, params.n_processes);
             std::cout << "Initializing protac..." << std::endl;
             // Initialize Protac object with the current molecule and other parameters
             PROTac.init(mol.get(), w_anch.get(), w_flex.get(),
-                    params.protein_flex_file, params.n_processes,
-                    *grid_anchor, *grid_flex, params.verbose > 0);
+                    params.protein_flex_file, params.verbose > 0);
             // Print Protac information based on verbose setting
             if (params.verbose > 0) {
                 std::cout << "Verbose mode enabled (level: " << params.verbose << ")" << std::endl;

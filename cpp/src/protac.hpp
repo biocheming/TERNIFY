@@ -28,6 +28,9 @@
 
 class Protac {
 public:
+    // 构造函数
+    Protac(const GRID& grid_anchor, const GRID& grid_flex, int processes = 1);
+    
     // 内部结构体定义
     struct Solution {
         std::vector<double> dihedrals;
@@ -43,9 +46,6 @@ public:
               RDKit::ROMol* w_anch,
               RDKit::ROMol* w_flex,
               const std::string& fpro_flex,
-              int processes,
-              const GRID& grid_anchor,
-              const GRID& grid_flex,
               bool verbose = false);
     // 采样相关函数
     Solution sample_single(bool verbose = false);
@@ -74,14 +74,15 @@ public:
 
 private:
     // 成员变量
+    GRID grid_anchor_;
+    GRID grid_flex_;
+    int processes_;
+
     std::shared_ptr<RDKit::ROMol> protac_;
     std::vector<std::array<int, 4>> rot_dihe_;
     double E_intra_ref_;
     std::vector<Solution> solutions_;
-    int processes_;
-    
-    GRID grid_anchor_;
-    GRID grid_flex_;
+
     
     Protein protein_;
 
@@ -92,6 +93,9 @@ private:
     std::vector<IQHb> q_anchor_;
     std::array<double, 3> translation_;
     std::vector<int> warhead_atoms_;  // 存储弹头原子的索引，用于RMSD计算
+    
+    // 新增：保存anchor warhead对齐信息
+    std::vector<int> anchor_warhead_atoms_;  // 保存anchor warhead原子的索引
     
     struct VdwParam {
         int atom1_idx;
@@ -121,9 +125,38 @@ private:
     void list(const std::vector<int>& warheads, 
               const std::vector<std::pair<int, int>>& rbond,
               bool print_info = false);
+    
+    // 对齐相关的私有函数
+    void alignProtacToFlexWarhead(RDKit::ROMol* w_flex, bool verbose = false);
+    void alignProtacToAnchorWarhead(RDKit::ROMol* w_anch, bool verbose = false);
+    
+    // 可旋转键和二面角查找函数
+    void findRotatableDihedrals(const std::vector<int>& linker, bool verbose = false);
+    
+    void calHeavyAtomsCharge(RDKit::ROMol& mol);
+    // 电荷和氢键类型计算函数
+    void calculateQAnchor(const std::vector<int>& hb_donors, const std::vector<int>& hb_acceptors, bool verbose = false);
+    void calculateQFlex(const std::vector<int>& hb_donors, const std::vector<int>& hb_acceptors, bool verbose = false);
+    
+    // 氢键供受体识别函数
+    std::pair<std::vector<int>, std::vector<int>> findHB_DA(bool verbose = false);
+    
+    // 坐标系统设置函数
+    void setupCoordinateSystem(RDKit::ROMol* w_flex, const std::string& fpro_flex, bool verbose = false);
+    
+    // Linker原子识别函数
+    std::vector<int> findLinkerAtoms(bool verbose = false);
+    
+    // 能量组分详细输出的辅助函数
+    void printEnergyComponents(const RDKit::ROMol& mol, 
+                              const std::vector<double>& dihedrals, 
+                              double total_energy, 
+                              bool is_custom_dihedrals);
+    
     // 扫描单个二面角的低能构象
     std::vector<double> scanTorsion(double v1, double v2, double v3);
     std::vector<double> listTorsion(double grid_step);
+    
     // 随机数生成器
     std::mt19937 rng_;
     std::uniform_real_distribution<double> angle_dist_;
