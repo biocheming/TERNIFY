@@ -29,7 +29,7 @@
 class Protac {
 public:
     // 构造函数
-    Protac(int processes = 1);
+    Protac(const GRID& grid_anchor, const GRID& grid_flex, int processes = 1);
     
     // 内部结构体定义
     struct Solution {
@@ -46,8 +46,6 @@ public:
               RDKit::ROMol* w_anch,
               RDKit::ROMol* w_flex,
               const std::string& fpro_flex,
-              const GRID& grid_anchor,
-              const GRID& grid_flex,
               bool verbose = false);
     // 采样相关函数
     Solution sample_single(bool verbose = false);
@@ -76,10 +74,10 @@ public:
 
 private:
     // 成员变量
-    int processes_;
     GRID grid_anchor_;
     GRID grid_flex_;
-    
+    int processes_;
+
     std::shared_ptr<RDKit::ROMol> protac_;
     std::vector<std::array<int, 4>> rot_dihe_;
     double E_intra_ref_;
@@ -97,7 +95,6 @@ private:
     std::vector<int> warhead_atoms_;  // 存储弹头原子的索引，用于RMSD计算
     
     // 新增：保存anchor warhead对齐信息
-    std::vector<std::pair<int, RDGeom::Point3D>> anchor_atom_positions_;  // 保存anchor warhead原子的目标位置
     std::vector<int> anchor_warhead_atoms_;  // 保存anchor warhead原子的索引
     
     struct VdwParam {
@@ -136,6 +133,7 @@ private:
     // 可旋转键和二面角查找函数
     void findRotatableDihedrals(const std::vector<int>& linker, bool verbose = false);
     
+    void calHeavyAtomsCharge(RDKit::ROMol& mol);
     // 电荷和氢键类型计算函数
     void calculateQAnchor(const std::vector<int>& hb_donors, const std::vector<int>& hb_acceptors, bool verbose = false);
     void calculateQFlex(const std::vector<int>& hb_donors, const std::vector<int>& hb_acceptors, bool verbose = false);

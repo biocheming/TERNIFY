@@ -50,8 +50,11 @@ std::shared_ptr<RDKit::ROMol> MinimizeH(const RDKit::ROMol& input_mol, double fo
     return mol;
 }
 
-void optimizeH(RDKit::ROMol& mol, double forceConst) {
+void optimizeH(RDKit::ROMol& mol, double forceConst, bool addH) {
     // 创建MMFF力场
+    if (addH) {
+        RDKit::MolOps::addHs(mol, false, true);
+    }
     RDKit::MMFF::MMFFMolProperties mmffProps(mol, "MMFF94s");
     if (!mmffProps.isValid()) {
         throw std::runtime_error("MMFF properties are invalid for this molecule.");

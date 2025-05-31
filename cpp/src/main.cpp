@@ -265,12 +265,11 @@ void run_ternify(const Parameters& params) {
                 }
             }
             
-            Protac PROTac(params.n_processes);
+            Protac PROTac(*grid_anchor, *grid_flex, params.n_processes);
             std::cout << "Initializing protac..." << std::endl;
             // Initialize Protac object with the current molecule and other parameters
             PROTac.init(mol.get(), w_anch.get(), w_flex.get(),
-                    params.protein_flex_file,
-                    *grid_anchor, *grid_flex, params.verbose > 0);
+                    params.protein_flex_file, params.verbose > 0);
             // Print Protac information based on verbose setting
             if (params.verbose > 0) {
                 std::cout << "Verbose mode enabled (level: " << params.verbose << ")" << std::endl;

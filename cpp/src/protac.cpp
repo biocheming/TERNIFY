@@ -27,7 +27,8 @@ thread_local std::unique_ptr<RDKit::ROMol> Protac::thread_local_mol_;
 std::mutex Protac::output_mutex_;
 
 // 构造函数 - 初始化随机数生成器和进程数
-Protac::Protac(int processes) : processes_(processes) {
+Protac::Protac(const GRID& grid_anchor, const GRID& grid_flex, int processes) 
+    : grid_anchor_(grid_anchor), grid_flex_(grid_flex), processes_(processes) {
     // Initialize random number generators
     rng_ = std::mt19937(std::random_device{}());
     angle_dist_ = std::uniform_real_distribution<double>(-180.0, 180.0);
@@ -38,42 +39,24 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
                  RDKit::ROMol* w_anch,   //E3 lig
                  RDKit::ROMol* w_flex,   //POI lig
                  const std::string& fpro_flex, // POI protein
-                 const GRID& grid_anchor,
-                 const GRID& grid_flex,
                  bool verbose) {
     
-    grid_anchor_ = grid_anchor;
-    grid_flex_ = grid_flex;
 
     // 初始化分子, 并优化
     protac_= MinimizeH(*protac, 100.0, false);
     RDKit::ROMol protac_ini_H = *protac_ ;
-    // 使用 SDWriter 保存初始化分子
-    RDKit::SDWriter writer1("protac_ini_H.sdf");
-    writer1.write(protac_ini_H);
-    writer1.close();
-    RDKit::computeGasteigerCharges(*protac_);
+    // 计算重原子电荷（包含氢原子电荷）
+    calHeavyAtomsCharge(*protac_);
+    RDKit::MolOps::removeHs(*protac_);
     
-    // 获取构象
-    RDKit::Conformer& conf_protac = protac_->getConformer();        //protac whole part
-
     // 设置坐标系统和读取蛋白质
     setupCoordinateSystem(w_flex, fpro_flex, verbose);
-    
     // 对齐flexible warhead
     alignProtacToFlexWarhead(w_flex, verbose);
-    RDKit::SDWriter writer2("protac_align_flex.sdf");
-    writer2.write(*protac_);
-    writer2.close();
-    
     // 对齐锚定warhead w_anch
-    alignProtacToAnchorWarhead(w_anch, verbose);
-    RDKit::SDWriter writer3("protac_align_anch.sdf");
-    writer3.write(*protac_);
-    writer3.close();    
-    // 氢原子优化
-    optimizeH(*protac_, 80.0);
-    conf_protac = protac_->getConformer();
+    alignProtacToAnchorWarhead(w_anch, verbose);  
+    // addH，氢原子优化
+    optimizeH(*protac_, 80.0, true);
     
     // 识别氢键供体和受体
     auto [hb_donors, hb_acceptors] = findHB_DA(verbose);
@@ -1214,58 +1197,59 @@ void Protac::alignProtacToFlexWarhead(RDKit::ROMol* w_flex, bool verbose) {
         }
     }
 
-// 检查是否需要扩展
-RDKit::Atom* cp_atom = protac_->getAtomWithIdx(cp_01);
-bool isSP3 = (cp_atom->getHybridization() == RDKit::Atom::SP3);
-size_t requiredMinSize = isSP3 ? 4 : 3;
-bool needsExpansion = (minimal_pairs.size() < requiredMinSize);
+    // 检查是否需要扩展
+    RDKit::Atom* cp_atom = protac_->getAtomWithIdx(cp_01);
+    bool isSP3 = (cp_atom->getHybridization() == RDKit::Atom::SP3);
+    size_t requiredMinSize = isSP3 ? 4 : 3;
+    bool needsExpansion = (minimal_pairs.size() < requiredMinSize);
 
-if (needsExpansion) {
-    // 获取拓扑距离矩阵
-    const double* topDistMat = RDKit::MolOps::getDistanceMat(*w_flex);
-    size_t n = w_flex->getNumAtoms();
+    if (needsExpansion) {
+        // 获取拓扑距离矩阵
+        const double* topDistMat = RDKit::MolOps::getDistanceMat(*w_flex);
+        size_t n = w_flex->getNumAtoms();
     
-    // 收集候选原子及其到cp_01_in_flex的拓扑距离
-    std::vector<std::pair<double, std::pair<int, int>>> candidates; // {distance, {protac_idx, flex_idx}}
+        // 收集候选原子及其到cp_01_in_flex的拓扑距离
+        std::vector<std::pair<double, std::pair<int, int>>> candidates; // {distance, {protac_idx, flex_idx}}
     
-    for (const auto& pair : match_01) {
-        int protac_idx = pair.second;
-        int flex_idx = pair.first;
+        for (const auto& pair : match_01) {
+            int protac_idx = pair.second;
+            int flex_idx = pair.first;
         
-        // 跳过已经在minimal_pairs中的原子
-        bool already_included = false;
-        for (const auto& existing : minimal_pairs) {
-            if (existing.first == protac_idx) {
-                already_included = true;
-                break;
+            // 跳过已经在minimal_pairs中的原子
+            bool already_included = false;
+            for (const auto& existing : minimal_pairs) {
+                if (existing.first == protac_idx) {
+                    already_included = true;
+                    break;
+                }
+            }
+        
+        
+            if (!already_included) {
+                // 计算拓扑距离
+                double distance = topDistMat[cp_01_in_flex * n + flex_idx];
+                candidates.push_back({distance, {protac_idx, flex_idx}});
             }
         }
-        
-        if (!already_included) {
-            // 计算拓扑距离
-            double distance = topDistMat[cp_01_in_flex * n + flex_idx];
-            candidates.push_back({distance, {protac_idx, flex_idx}});
+    
+        // 按拓扑距离排序
+        std::sort(candidates.begin(), candidates.end());
+    
+        // 添加最近的原子直到达到要求数量
+        for (const auto& candidate : candidates) {
+            if (minimal_pairs.size() >= requiredMinSize) break;
+            minimal_pairs.push_back(candidate.second);
         }
     }
-    
-    // 按拓扑距离排序
-    std::sort(candidates.begin(), candidates.end());
-    
-    // 添加最近的原子直到达到要求数量
-    for (const auto& candidate : candidates) {
-        if (minimal_pairs.size() >= requiredMinSize) break;
-        minimal_pairs.push_back(candidate.second);
-    }
-}
 
-if (verbose) {
-    std::cout << "Flexible warhead minimal matching unit size: " << minimal_pairs.size() << " atoms" << std::endl;
-    std::cout << "Required minimum size: " << requiredMinSize << " (CP atom is " 
-              << (isSP3 ? "SP3" : "non-SP3") << ")" << std::endl;
-    if (needsExpansion) {
-        std::cout << "Extended based on hybridization and topological distance" << std::endl;
+    if (verbose) {
+        std::cout << "Flexible warhead minimal matching unit size: " << minimal_pairs.size() << " atoms" << std::endl;
+        std::cout << "Required minimum size: " << requiredMinSize << " (CP atom is " 
+                  << (isSP3 ? "SP3" : "non-SP3") << ")" << std::endl;
+        if (needsExpansion) {
+            std::cout << "Extended based on hybridization and topological distance" << std::endl;
+        }
     }
-}
     
     // 创建对齐匹配向量
     RDKit::MatchVectType aligned_match;
@@ -1282,35 +1266,12 @@ if (verbose) {
         std::cerr << "Error during flexible warhead alignment: " << e.what() << std::endl;
         throw;
     }
-    
-    // 记录要移动的重原子的原始坐标
-    std::vector<RDGeom::Point3D> original_positions;
-    for (size_t i = 0; i < match_01.size(); ++i) {
-        original_positions.push_back(conf_protac.getAtomPos(match_01[i].second));
-    }
-    
+
     // 更新原子位置
     for (size_t i = 0; i < match_01.size(); ++i) {
-        const RDGeom::Point3D& coor = conf_flex.getAtomPos(match_01[i].first);
-        const RDGeom::Point3D& original_heavy_pos = original_positions[i];
-        
+        const RDGeom::Point3D& coor = conf_flex.getAtomPos(match_01[i].first);        
         conf_protac.setAtomPos(match_01[i].second, coor);
         idx_.push_back(match_01[i].second);
-        
-        // 计算平移向量并应用到连接的氢原子
-        RDGeom::Point3D translation = coor - original_heavy_pos;
-        RDKit::Atom* heavy_atom = protac_->getAtomWithIdx(match_01[i].second);
-        
-        auto [nbrIdx, endNbrs] = protac_->getAtomNeighbors(heavy_atom);
-        while (nbrIdx != endNbrs) {
-            RDKit::Atom* neighbor = protac_->getAtomWithIdx(*nbrIdx);
-            if (neighbor->getAtomicNum() == 1) {
-                RDGeom::Point3D h_pos_before = conf_protac.getAtomPos(*nbrIdx);
-                RDGeom::Point3D h_target_pos = h_pos_before + translation;
-                conf_protac.setAtomPos(*nbrIdx, h_target_pos);
-            }
-            ++nbrIdx;
-        }
     }
 }
 
@@ -1418,45 +1379,12 @@ void Protac::alignProtacToAnchorWarhead(RDKit::ROMol* w_anch, bool verbose) {
         throw;
     }
     
-    // 记录要移动的重原子的原始坐标
-    std::vector<RDGeom::Point3D> original_anch_positions;
-    for (size_t i = 0; i < match_02.size(); ++i) {
-        original_anch_positions.push_back(conf_protac.getAtomPos(match_02[i].second));
-    }
-    
-    // 清空之前的anchor信息
-    anchor_atom_positions_.clear();
-    anchor_warhead_atoms_.clear();
-    
     // 更新原子位置并保存anchor warhead信息
     for (size_t i = 0; i < match_02.size(); ++i) {
         const RDGeom::Point3D& coor = conf_anch.getAtomPos(match_02[i].first);
-        const RDGeom::Point3D& original_heavy_pos = original_anch_positions[i];
-        
         conf_protac.setAtomPos(match_02[i].second, coor);
-        
-        // 保存anchor warhead原子的目标位置
-        anchor_atom_positions_.push_back(std::make_pair(match_02[i].second, coor));
+        // 保存anchor warhead原子
         anchor_warhead_atoms_.push_back(match_02[i].second);
-        
-        // 计算平移向量并应用到连接的氢原子
-        RDGeom::Point3D translation = coor - original_heavy_pos;
-        RDKit::Atom* heavy_atom = protac_->getAtomWithIdx(match_02[i].second);
-        
-        auto [nbrIdx, endNbrs] = protac_->getAtomNeighbors(heavy_atom);
-        while (nbrIdx != endNbrs) {
-            RDKit::Atom* neighbor = protac_->getAtomWithIdx(*nbrIdx);
-            if (neighbor->getAtomicNum() == 1) {
-                RDGeom::Point3D h_pos_before = conf_protac.getAtomPos(*nbrIdx);
-                RDGeom::Point3D h_target_pos = h_pos_before + translation;
-                conf_protac.setAtomPos(*nbrIdx, h_target_pos);
-                
-                // 也保存氢原子的目标位置
-                anchor_atom_positions_.push_back(std::make_pair(*nbrIdx, h_target_pos));
-                anchor_warhead_atoms_.push_back(*nbrIdx);
-            }
-            ++nbrIdx;
-        }
     }
 }
 
@@ -1593,6 +1521,39 @@ void Protac::findRotatableDihedrals(const std::vector<int>& linker, bool verbose
     list(warheads, rbond, verbose);
 }
 
+// 计算重原子电荷
+void Protac::calHeavyAtomsCharge(RDKit::ROMol& mol) {
+    // 计算Gasteiger电荷（包括氢原子）
+    RDKit::computeGasteigerCharges(mol);
+    
+    // 将氢原子电荷加到重原子上
+    for (auto atom : mol.atoms()) {
+        if (atom->getAtomicNum() != 1) { // 重原子
+            double total_charge = 0.0;
+            if (atom->hasProp("_GasteigerCharge")) {
+                atom->getProp("_GasteigerCharge", total_charge);
+            }
+            
+            // 累加连接的氢原子电荷
+            auto [nbrIdx, endNbrs] = mol.getAtomNeighbors(atom);
+            while (nbrIdx != endNbrs) {
+                RDKit::Atom* neighbor = mol.getAtomWithIdx(*nbrIdx);
+                if (neighbor->getAtomicNum() == 1) { // 氢原子
+                    double h_charge = 0.0;
+                    if (neighbor->hasProp("_GasteigerCharge")) {
+                        neighbor->getProp("_GasteigerCharge", h_charge);
+                        total_charge += h_charge;
+                    }
+                }
+                ++nbrIdx;
+            }
+            
+            // 设置合并后的电荷
+            atom->setProp("_GasteigerCharge", total_charge);
+        }
+    }
+}
+
 // 计算q_anchor：不在flexible warhead中的原子
 void Protac::calculateQAnchor(const std::vector<int>& hb_donors, const std::vector<int>& hb_acceptors, bool verbose) {
     q_anchor_.clear();  // 清空之前的数据
@@ -1608,28 +1569,11 @@ void Protac::calculateQAnchor(const std::vector<int>& hb_donors, const std::vect
             // 跳过氢原子，只处理重原子
             if (atom->getAtomicNum() == 1) continue;
             
-            // 获取Gasteiger电荷
+            // 获取重原子电荷（已包含氢原子电荷）
             double gasteiger_charge = 0.0;
             if (atom->hasProp("_GasteigerCharge")) {
                 atom->getProp("_GasteigerCharge", gasteiger_charge);
             }
-            
-            // 手动累加连接氢原子的电荷
-            double hydrogen_charges = 0.0;
-            auto [nbrIdx, endNbrs] = protac_->getAtomNeighbors(atom);
-            while (nbrIdx != endNbrs) {
-                RDKit::Atom* neighbor = protac_->getAtomWithIdx(*nbrIdx);
-                if (neighbor->getAtomicNum() == 1) {  // 氢原子
-                    double h_charge = 0.0;
-                    if (neighbor->hasProp("_GasteigerCharge")) {
-                        neighbor->getProp("_GasteigerCharge", h_charge);
-                        hydrogen_charges += h_charge;
-                    }
-                }
-                ++nbrIdx;
-            }
-            
-            double total_charge = gasteiger_charge + hydrogen_charges;
             
             // 确定氢键类型
             std::optional<int> hb_type = std::nullopt;
@@ -1640,7 +1584,7 @@ void Protac::calculateQAnchor(const std::vector<int>& hb_donors, const std::vect
             }
             
             // 添加到q_anchor列表
-            q_anchor_.push_back(std::make_tuple(i, total_charge, hb_type));
+            q_anchor_.push_back(std::make_tuple(i, gasteiger_charge, hb_type));
         }
     }
     
@@ -1664,28 +1608,11 @@ void Protac::calculateQFlex(const std::vector<int>& hb_donors, const std::vector
             // 跳过氢原子，只处理重原子
             if (atom->getAtomicNum() == 1) continue;
             
-            // 获取Gasteiger电荷
+            // 获取重原子电荷（已包含氢原子电荷）
             double gasteiger_charge = 0.0;
             if (atom->hasProp("_GasteigerCharge")) {
                 atom->getProp("_GasteigerCharge", gasteiger_charge);
             }
-            
-            // 手动累加连接氢原子的电荷
-            double hydrogen_charges = 0.0;
-            auto [nbrIdx, endNbrs] = protac_->getAtomNeighbors(atom);
-            while (nbrIdx != endNbrs) {
-                RDKit::Atom* neighbor = protac_->getAtomWithIdx(*nbrIdx);
-                if (neighbor->getAtomicNum() == 1) {  // 氢原子
-                    double h_charge = 0.0;
-                    if (neighbor->hasProp("_GasteigerCharge")) {
-                        neighbor->getProp("_GasteigerCharge", h_charge);
-                        hydrogen_charges += h_charge;
-                    }
-                }
-                ++nbrIdx;
-            }
-            
-            double total_charge = gasteiger_charge + hydrogen_charges;
             
             // 确定氢键类型
             std::optional<int> hb_type = std::nullopt;
@@ -1696,7 +1623,7 @@ void Protac::calculateQFlex(const std::vector<int>& hb_donors, const std::vector
             }
             
             // 添加到q_flex列表
-            q_flex_.push_back(std::make_tuple(i, total_charge, hb_type));
+            q_flex_.push_back(std::make_tuple(i, gasteiger_charge, hb_type));
         }
     }
     
