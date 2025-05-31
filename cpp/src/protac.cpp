@@ -1579,6 +1579,7 @@ void Protac::calculateQAnchor(const std::vector<int>& hb_donors, const std::vect
             }
             
             // 添加到q_anchor列表
+            hb_type = std::nullopt;
             q_anchor_.push_back(std::make_tuple(i, gasteiger_charge, hb_type));
         }
     }
@@ -1618,6 +1619,7 @@ void Protac::calculateQFlex(const std::vector<int>& hb_donors, const std::vector
             }
             
             // 添加到q_flex列表
+            hb_type = std::nullopt;
             q_flex_.push_back(std::make_tuple(i, gasteiger_charge, hb_type));
         }
     }
