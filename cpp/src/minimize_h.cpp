@@ -58,8 +58,12 @@ void optimizeH(RDKit::ROMol& mol, double forceConst) {
     }
     
     // 关闭VDW和静电相互作用
-    mmffProps.setMMFFVdWTerm(false);
-    mmffProps.setMMFFEleTerm(false);
+    //mmffProps.setMMFFVdWTerm(false);
+    //mmffProps.setMMFFEleTerm(false);
+    mmffProps.setMMFFDielectricConstant(4.0);
+
+    // 设置介电模型（1 表示常数介电模型）
+    mmffProps.setMMFFDielectricModel(2);
     
     // 构建力场
     std::unique_ptr<ForceFields::ForceField> ff(

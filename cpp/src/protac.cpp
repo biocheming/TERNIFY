@@ -46,8 +46,12 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
     grid_flex_ = grid_flex;
 
     // 初始化分子, 并优化
-    protac_= MinimizeH(*protac, 1.0e9, false);
+    protac_= MinimizeH(*protac, 100.0, false);
     RDKit::ROMol protac_ini_H = *protac_ ;
+    // 使用 SDWriter 保存初始化分子
+    RDKit::SDWriter writer1("protac_ini_H.sdf");
+    writer1.write(protac_ini_H);
+    writer1.close();
     RDKit::computeGasteigerCharges(*protac_);
     
     // 获取构象
@@ -58,12 +62,17 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
     
     // 对齐flexible warhead
     alignProtacToFlexWarhead(w_flex, verbose);
+    RDKit::SDWriter writer2("protac_align_flex.sdf");
+    writer2.write(*protac_);
+    writer2.close();
     
     // 对齐锚定warhead w_anch
     alignProtacToAnchorWarhead(w_anch, verbose);
-    
+    RDKit::SDWriter writer3("protac_align_anch.sdf");
+    writer3.write(*protac_);
+    writer3.close();    
     // 氢原子优化
-    optimizeH(*protac_, 1.0e5);
+    optimizeH(*protac_, 80.0);
     conf_protac = protac_->getConformer();
     
     // 识别氢键供体和受体
@@ -1189,7 +1198,7 @@ void Protac::alignProtacToFlexWarhead(RDKit::ROMol* w_flex, bool verbose) {
     if (cp_01_in_flex == -1) {
         throw std::runtime_error("Could not find cp_01 in w_flex match");
     }
-    
+        
     // 构建最小匹配单元
     std::vector<std::pair<int, int>> minimal_pairs;
     minimal_pairs.push_back(std::make_pair(cp_01, cp_01_in_flex));
@@ -1204,10 +1213,59 @@ void Protac::alignProtacToFlexWarhead(RDKit::ROMol* w_flex, bool verbose) {
             minimal_pairs.push_back(std::make_pair(protac_idx, flex_idx));
         }
     }
+
+// 检查是否需要扩展
+RDKit::Atom* cp_atom = protac_->getAtomWithIdx(cp_01);
+bool isSP3 = (cp_atom->getHybridization() == RDKit::Atom::SP3);
+size_t requiredMinSize = isSP3 ? 4 : 3;
+bool needsExpansion = (minimal_pairs.size() < requiredMinSize);
+
+if (needsExpansion) {
+    // 获取拓扑距离矩阵
+    const double* topDistMat = RDKit::MolOps::getDistanceMat(*w_flex);
+    size_t n = w_flex->getNumAtoms();
     
-    if (verbose) {
-        std::cout << "Flexible warhead minimal matching unit size: " << minimal_pairs.size() << " atoms" << std::endl;
+    // 收集候选原子及其到cp_01_in_flex的拓扑距离
+    std::vector<std::pair<double, std::pair<int, int>>> candidates; // {distance, {protac_idx, flex_idx}}
+    
+    for (const auto& pair : match_01) {
+        int protac_idx = pair.second;
+        int flex_idx = pair.first;
+        
+        // 跳过已经在minimal_pairs中的原子
+        bool already_included = false;
+        for (const auto& existing : minimal_pairs) {
+            if (existing.first == protac_idx) {
+                already_included = true;
+                break;
+            }
+        }
+        
+        if (!already_included) {
+            // 计算拓扑距离
+            double distance = topDistMat[cp_01_in_flex * n + flex_idx];
+            candidates.push_back({distance, {protac_idx, flex_idx}});
+        }
     }
+    
+    // 按拓扑距离排序
+    std::sort(candidates.begin(), candidates.end());
+    
+    // 添加最近的原子直到达到要求数量
+    for (const auto& candidate : candidates) {
+        if (minimal_pairs.size() >= requiredMinSize) break;
+        minimal_pairs.push_back(candidate.second);
+    }
+}
+
+if (verbose) {
+    std::cout << "Flexible warhead minimal matching unit size: " << minimal_pairs.size() << " atoms" << std::endl;
+    std::cout << "Required minimum size: " << requiredMinSize << " (CP atom is " 
+              << (isSP3 ? "SP3" : "non-SP3") << ")" << std::endl;
+    if (needsExpansion) {
+        std::cout << "Extended based on hybridization and topological distance" << std::endl;
+    }
+}
     
     // 创建对齐匹配向量
     RDKit::MatchVectType aligned_match;

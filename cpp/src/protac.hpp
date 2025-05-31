@@ -76,14 +76,15 @@ public:
 
 private:
     // 成员变量
+    int processes_;
+    GRID grid_anchor_;
+    GRID grid_flex_;
+    
     std::shared_ptr<RDKit::ROMol> protac_;
     std::vector<std::array<int, 4>> rot_dihe_;
     double E_intra_ref_;
     std::vector<Solution> solutions_;
-    int processes_;
-    
-    GRID grid_anchor_;
-    GRID grid_flex_;
+
     
     Protein protein_;
 

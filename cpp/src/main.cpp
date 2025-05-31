@@ -226,11 +226,13 @@ void run_ternify(const Parameters& params) {
             std::cout << "\n=== Processing PROTAC molecule " << (protac_index + 1) << " of " << total_protacs << " ===" << std::endl;
             std::cout << "READ: Number of atoms in protac: " << mol->getNumAtoms() << std::endl;
             std::cout << "READ: Number of bonds in protac: " << mol->getNumBonds() << std::endl;
+            
             if (RDKit::SubstructMatch(*mol, *w_anch).empty() || 
                 RDKit::SubstructMatch(*mol, *w_flex).empty() ){
                 std::cout << "WARNING: Skipping molecule " << protac_index + 1 << ": this protac does not match substructures with anch/flex." << std::endl;
                 continue;
             }
+            
             
             // 检查网格是否都已成功初始化
             if (!grid_anchor_initialized || !grid_flex_initialized) {
