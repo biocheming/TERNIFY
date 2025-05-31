@@ -43,11 +43,10 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
     
 
     // 初始化分子, 并优化
-    protac_= MinimizeH(*protac, 100.0, false);
-    RDKit::ROMol protac_ini_H = *protac_ ;
+    protac_ = std::make_shared<RDKit::ROMol>(*protac); //不带H
+    std::shared_ptr<RDKit::ROMol> protac_ini_H = MinimizeH(*protac_, 1.0e9, false);
     // 计算重原子电荷（包含氢原子电荷）
     calHeavyAtomsCharge(*protac_);
-    RDKit::MolOps::removeHs(*protac_);
     
     // 设置坐标系统和读取蛋白质
     setupCoordinateSystem(w_flex, fpro_flex, verbose);
@@ -56,7 +55,7 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
     // 对齐锚定warhead w_anch
     alignProtacToAnchorWarhead(w_anch, verbose);  
     // addH，氢原子优化
-    optimizeH(*protac_, 80.0, true);
+    protac_ = MinimizeH(*protac_, 1.0e9, false);
     
     // 识别氢键供体和受体
     auto [hb_donors, hb_acceptors] = findHB_DA(verbose);
@@ -68,11 +67,11 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
     // 查找linker原子
     std::vector<int> linker = findLinkerAtoms(verbose);
 
-    // 查找可旋转键和构建二面角
+    // 查找可旋转键和构建二面角，获得 rot_dihe_, list_vdw_, list_dihe_
     findRotatableDihedrals(linker, verbose);
     
     // 计算参考内部能量（基于经过两次对齐和优化的构象）
-    E_intra_ref_ = e_intra(&protac_ini_H);
+    E_intra_ref_ = e_intra(protac_ini_H.get());
     std::cout << "E_intra_ref: " << E_intra_ref_ << std::endl;
     
     // 输出linker原子信息（用于调试）
@@ -223,7 +222,7 @@ void Protac::list(const std::vector<int>& warheads, const std::vector<std::pair<
                 
                 // 对拓扑距离=3的1-4连接键进行能量缩放（一般是0.75）
                 if (std::abs(topDist[i][j] - 3.0) < 0.001) {  // 使用浮点比较
-                    param.param1 *= 0.75;  // 对epsilon进行缩放
+                    param.param1 *= 1.00;  // 对epsilon进行缩放
                 }
                 
                 // 打印VdW参数
@@ -918,7 +917,8 @@ double Protac::e_intra(const RDKit::ROMol* mol) const {
         double term2 = p.param4 / (std::pow(dist, 7) + p.param5);
         double result = term1_pow * (term2 - 2.0);
         //std::cout << "[VDW]: " << p.param1 * result << ": " << p.atom1_idx << "-" << p.atom2_idx << " " << dist << std::endl;
-        vdw += (p.param1 * result > 3.0) ? 3.0 : p.param1 * result;
+        //vdw += (p.param1 * result > 3.0) ? 3.0 : p.param1 * result;
+        vdw += p.param1 * result;
     }
     double dihe = 0.0;
     for (const auto& d : list_dihe_) {
@@ -1518,7 +1518,7 @@ void Protac::findRotatableDihedrals(const std::vector<int>& linker, bool verbose
     if (verbose) {
         std::cout << "Processing FF parameters..." << std::endl;
     }
-    list(warheads, rbond, verbose);
+    list(warheads, rbond, verbose); //for list_vdw_, list_dihe_
 }
 
 // 计算重原子电荷
@@ -1529,26 +1529,21 @@ void Protac::calHeavyAtomsCharge(RDKit::ROMol& mol) {
     // 将氢原子电荷加到重原子上
     for (auto atom : mol.atoms()) {
         if (atom->getAtomicNum() != 1) { // 重原子
-            double total_charge = 0.0;
+            double heavy_charge = 0.0;
+            double h_charge = 0.0;
+            
+            // 获取重原子电荷
             if (atom->hasProp("_GasteigerCharge")) {
-                atom->getProp("_GasteigerCharge", total_charge);
+                atom->getProp("_GasteigerCharge", heavy_charge);
             }
             
-            // 累加连接的氢原子电荷
-            auto [nbrIdx, endNbrs] = mol.getAtomNeighbors(atom);
-            while (nbrIdx != endNbrs) {
-                RDKit::Atom* neighbor = mol.getAtomWithIdx(*nbrIdx);
-                if (neighbor->getAtomicNum() == 1) { // 氢原子
-                    double h_charge = 0.0;
-                    if (neighbor->hasProp("_GasteigerCharge")) {
-                        neighbor->getProp("_GasteigerCharge", h_charge);
-                        total_charge += h_charge;
-                    }
-                }
-                ++nbrIdx;
+            // 获取连接的氢原子电荷总和
+            if (atom->hasProp("_GasteigerHCharge")) {
+                atom->getProp("_GasteigerHCharge", h_charge);
             }
             
             // 设置合并后的电荷
+            double total_charge = heavy_charge + h_charge;
             atom->setProp("_GasteigerCharge", total_charge);
         }
     }
