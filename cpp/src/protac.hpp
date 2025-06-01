@@ -24,6 +24,8 @@
 #include "minimize_h.hpp"
 #include "align.hpp"
 #include "parameters.hpp"
+#include <chrono>
+#include <iomanip>
 
 
 class Protac {
@@ -79,6 +81,7 @@ private:
     int processes_;
 
     std::shared_ptr<RDKit::ROMol> protac_;
+    std::shared_ptr<RDKit::ROMol> protac_ini_H_;
     std::vector<std::array<int, 4>> rot_dihe_;
     double E_intra_ref_;
     std::vector<Solution> solutions_;
@@ -87,15 +90,15 @@ private:
     Protein protein_;
 
     Coords coord_subs_var; //coord_subs_var = moveToOrigin(coords_flex_conf);
+    std::array<double, 3> translation_;    
     
-    std::vector<int> idx_;
+    std::vector<int> idx_;                    // 存储 w_flex 在 protac 中对应的原子索引（用于对齐后的坐标更新）
     std::vector<IQHb> q_flex_;
     std::vector<IQHb> q_anchor_;
-    std::array<double, 3> translation_;
-    std::vector<int> flex_warhead_atoms_;  // 存储弹头原子的索引，用于RMSD计算
+
     
-    // 新增：保存anchor warhead对齐信息
-    std::vector<int> anchor_warhead_atoms_;  // 保存anchor warhead原子的索引
+    std::vector<int> anchor_warhead_atoms_;   // 存储锚定warhead原子的索引
+    std::vector<int> linker_atoms_;           // 存储linker原子的索引
     
     struct VdwParam {
         int atom1_idx;
@@ -176,7 +179,14 @@ private:
     double computeRMSD(const RDKit::ROMol& mol, int confId1, int confId2);
     std::vector<std::vector<int>> clusterConformers(const RDKit::ROMol& mol, double rmsdThreshold);
     
-
+    // 辅助函数：输出单个构象
+    void outputSingleConformation(const Solution& solution, 
+                                  RDKit::SDWriter& w, 
+                                  std::ostream& fpro,
+                                  int model_number,
+                                  bool fpro_w,
+                                  const std::string& property_name,
+                                  const std::string& property_value);
 };
 
 class ThreadPool {
@@ -198,7 +208,9 @@ private:
 
 class ProgressBar {
 public:
-    ProgressBar(int total) : total_(total), current_(0), lastProgress_(0) {}
+    ProgressBar(int total) : total_(total), current_(0), lastProgress_(0), 
+                            start_time_(std::chrono::steady_clock::now()),
+                            last_update_time_(start_time_), last_completed_(0) {}
 
     void update(int completed) {
         std::lock_guard<std::mutex> lock(mutex_); // 确保线程安全
@@ -207,12 +219,39 @@ public:
         progress = std::min(progress, 100); // 确保百分比不会超过100
         int barWidth = 50; // 进度条的宽度
 
-        if (progress != lastProgress_) { // 只有当进度变化时才更新进度条
+        if (progress != lastProgress_ || completed > 0) { // 显示进度变化或有进展
             // 计算已填充的部分
             int filledWidth = progress * barWidth / 100;
+            
+            // 计算瞬时速率（使用滑动窗口）
+            auto current_time = std::chrono::steady_clock::now();
+            auto time_diff = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - last_update_time_).count();
+            double rate = 0.0;
+            
+            if (time_diff > 100) { // 至少100ms才更新速率，避免噪声
+                int completed_diff = current_ - last_completed_;
+                if (completed_diff > 0 && time_diff > 0) {
+                    rate = static_cast<double>(completed_diff) / (time_diff / 1000.0); // 瞬时速率
+                    last_update_time_ = current_time;
+                    last_completed_ = current_;
+                    current_rate_ = rate; // 保存当前速率
+                }
+            }
+            
+            // 如果没有足够的时间差，使用上次计算的速率
+            if (rate == 0.0 && current_rate_ > 0.0) {
+                rate = current_rate_;
+            }
+            
             std::cout << "\r[" << std::string(filledWidth, '=') 
                       << std::string(barWidth - filledWidth, ' ') // 填充剩余部分
-                      << "] " << progress << "%"; // 只显示一次百分比
+                      << "] " << progress << "%";
+            
+            // 添加速率显示
+            if (rate > 0) {
+                std::cout << " [speed: " << std::fixed << std::setprecision(2) << rate << "conf/(s*p)]";
+            }
+            
             std::cout.flush();
             lastProgress_ = progress;
         }
@@ -220,9 +259,22 @@ public:
 
     void finish() {
         std::lock_guard<std::mutex> lock(mutex_); // 确保线程安全
-        // 完成时确保输出100%且没有多余的百分号
+        
+        // 计算最终平均速率
+        auto end_time = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time_).count();
+        double final_rate = 0.0;
+        if (elapsed > 0 && total_ > 0) {
+            final_rate = static_cast<double>(total_) / (elapsed / 1000.0);
+        }
+        
+        // 完成时确保输出100%且显示最终速率
         std::cout << "\r[" << std::string(50, '=') 
-                  << "] 100%" << std::endl;
+                  << "] 100%";
+        if (final_rate > 0) {
+            std::cout << " [avg speed: " << std::fixed << std::setprecision(2) << final_rate << "conf/(s*p)]";
+        }
+        std::cout << std::endl;
     }
 
 private:
@@ -230,4 +282,8 @@ private:
     int current_;
     int lastProgress_; // 上次显示的进度
     std::mutex mutex_; // 互斥锁
+    std::chrono::steady_clock::time_point start_time_; // 开始时间
+    std::chrono::steady_clock::time_point last_update_time_; // 上次更新时间
+    int last_completed_; // 上次完成的任务数
+    double current_rate_; // 当前速率
 };
