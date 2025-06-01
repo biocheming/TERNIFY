@@ -139,7 +139,7 @@ void run_ternify(const Parameters& params) {
                         params.output_protein_file != "none";
     
     // 在程序开始时删除已存在的输出文件（重建）
-    std::cout << "Preparing output files..." << std::endl;
+    std::cout << "\nPreparing output files..." << std::endl;
     
     // 删除PROTAC输出文件（如果存在）
     if (std::remove(params.output_protac_file.c_str()) == 0) {
@@ -159,7 +159,7 @@ void run_ternify(const Parameters& params) {
     }
 
     // 创建网格
-    std::cout << "Creating grid for anchor_pro..." << std::endl;
+    std::cout << "\nCreating grid for anchor_pro..." << std::endl;
     std::unique_ptr<GRID> grid_anchor;
     bool grid_anchor_initialized = false;
     try {
@@ -328,10 +328,14 @@ int main(int argc, char* argv[]) {
         }
 
         // 打印版本信息
-        std::cout << "TERNIFY: Efficient Sampling of PROTAC-Induced Ternary Complexes\n"
-                  << "Hongtao Zhao, PhD\n"
-                  << "Ximing XU, PhD [C++ implementation]\n"
-                  << "Version: 2025-05-29" << std::endl;
+        std::cout << "|---------------------------------------------------------------|\n"
+                  << "|TERNIFY: Efficient Sampling of PROTAC-Induced Ternary Complexes|\n"
+                  << "|---------------------------------------------------------------|\n"
+                  << "|Hongtao Zhao, PhD                                              |\n"
+                  << "|Ximing XU, PhD [C++] xuximing@ouc.edu.cn                       |\n" 
+                  << "|Version: 2025-05-29                                            |\n" 
+                  << "|---------------------------------------------------------------|\n"
+                  << std::endl;
 
         // 读取参数并运行
         Parameters params;
