@@ -59,11 +59,12 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
     alignProtacToFlexWarhead(w_flex, verbose);
     // 对齐锚定warhead w_anch
     alignProtacToAnchorWarhead(w_anch, verbose);
+    
     // addH，氢原子优化
     protac_ = MinimizeH(*protac_, 1.0e9, false);
     //protac_ = optimizeH(*protac_, 0.2e2, true);
     //protac_ = MiniFixAtomTor(*protac_, anchor_warhead_atoms_, idx_, 1.0e5, true);
-    
+
     // 识别氢键供体和受体
     auto [hb_donors, hb_acceptors] = findHB_DA(verbose);
 
@@ -76,9 +77,9 @@ void Protac::init(RDKit::ROMol* protac,  // unaligned protac
 
     // 查找可旋转键和构建二面角，获得 rot_dihe_, list_vdw_, list_dihe_
     findRotatableDihedrals(linker_atoms_, verbose);
-
+    
     // 计算参考内部能量（基于经过两次对齐和优化的构象）
-    E_intra_ref_ = e_intra(protac_ini_H_.get());    
+    E_intra_ref_ = e_intra(protac_ini_H_.get());
 }
 
 // =============计算重原子电荷============
@@ -86,7 +87,7 @@ void Protac::calHeavyAtomsCharge(RDKit::ROMol& mol) {
     // 计算Gasteiger电荷（包括氢原子）
     RDKit::computeGasteigerCharges(mol);
     
-    // 将氢原子电荷加到重原子上
+    // 将氢原子电荷加到重原子上，存储在新属性_MergedCharge中
     for (auto atom : mol.atoms()) {
         if (atom->getAtomicNum() != 1) { // 重原子
             double heavy_charge = 0.0;
@@ -102,9 +103,9 @@ void Protac::calHeavyAtomsCharge(RDKit::ROMol& mol) {
                 atom->getProp("_GasteigerHCharge", h_charge);
             }
             
-            // 设置合并后的电荷
+            // 设置合并后的电荷到新属性
             double total_charge = heavy_charge + h_charge;
-            atom->setProp("_GasteigerCharge", total_charge);
+            atom->setProp("_MergedCharge", total_charge);
         }
     }
 }
@@ -482,10 +483,10 @@ void Protac::calculateQAnchor(const std::vector<int>& hb_donors, const std::vect
             // 跳过氢原子，只处理重原子
             if (atom->getAtomicNum() == 1) continue;
             
-            // 获取重原子电荷（已包含氢原子电荷）
-            double gasteiger_charge = 0.0;
-            if (atom->hasProp("_GasteigerCharge")) {
-                atom->getProp("_GasteigerCharge", gasteiger_charge);
+            // 获取合并后的电荷（重原子电荷 + 氢原子电荷）
+            double merged_charge = 0.0;
+            if (atom->hasProp("_MergedCharge")) {
+                atom->getProp("_MergedCharge", merged_charge);
             }
             
             // 确定氢键类型
@@ -498,7 +499,7 @@ void Protac::calculateQAnchor(const std::vector<int>& hb_donors, const std::vect
             
             // 添加到q_anchor列表
             hb_type = std::nullopt;
-            q_anchor_.push_back(std::make_tuple(i, gasteiger_charge, hb_type));
+            q_anchor_.push_back(std::make_tuple(i, merged_charge, hb_type));
         }
     }
     
@@ -522,10 +523,10 @@ void Protac::calculateQFlex(const std::vector<int>& hb_donors, const std::vector
             // 跳过氢原子，只处理重原子
             if (atom->getAtomicNum() == 1) continue;
             
-            // 获取重原子电荷（已包含氢原子电荷）
-            double gasteiger_charge = 0.0;
-            if (atom->hasProp("_GasteigerCharge")) {
-                atom->getProp("_GasteigerCharge", gasteiger_charge);
+            // 获取合并后的电荷（重原子电荷 + 氢原子电荷）
+            double merged_charge = 0.0;
+            if (atom->hasProp("_MergedCharge")) {
+                atom->getProp("_MergedCharge", merged_charge);
             }
             
             // 确定氢键类型
@@ -538,7 +539,7 @@ void Protac::calculateQFlex(const std::vector<int>& hb_donors, const std::vector
             
             // 添加到q_flex列表
             hb_type = std::nullopt;
-            q_flex_.push_back(std::make_tuple(i, gasteiger_charge, hb_type));
+            q_flex_.push_back(std::make_tuple(i, merged_charge, hb_type));
         }
     }
     

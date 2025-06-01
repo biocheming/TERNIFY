@@ -18,25 +18,34 @@ Matrix3d Kabsch(const std::vector<std::array<double, 3>>& coord_var,
         throw std::invalid_argument("Kabsch Search Error: the number of atoms is not equal or empty.");
         exit(EXIT_FAILURE);
     }
+    
     // Python: covar = np.dot(coord_var.T, coord_ref)
-    // 直接计算协方差矩阵，不进行质心化（调用者负责质心化）
-    MatrixXd covar = MatrixXd::Zero(3, 3);
+    // This means coord_var.transpose() * coord_ref
+    MatrixXd coord_var_matrix(coord_var.size(), 3);
+    MatrixXd coord_ref_matrix(coord_ref.size(), 3);
+    
     for (size_t i = 0; i < coord_var.size(); ++i) {
-        covar += Map<const Vector3d>(coord_var[i].data()) * 
-                 Map<const Vector3d>(coord_ref[i].data()).transpose();
+        coord_var_matrix.row(i) = Map<const Vector3d>(coord_var[i].data()).transpose();
+        coord_ref_matrix.row(i) = Map<const Vector3d>(coord_ref[i].data()).transpose();
     }
+    
+    // Python: covar = np.dot(coord_var.T, coord_ref)
+    MatrixXd covar = coord_var_matrix.transpose() * coord_ref_matrix;
 
     // SVD分解
     JacobiSVD<MatrixXd> svd(covar, ComputeFullU | ComputeFullV);
     Matrix3d u = svd.matrixU();
-    Matrix3d v = svd.matrixV();
+    Matrix3d vh = svd.matrixV().transpose();  // Note: V^T, not V
 
-    // 检查是否需要处理反射
-    Matrix3d i = Matrix3d::Identity();
-    double det = (u * v.transpose()).determinant();
-    i(2,2) = std::copysign(1.0, det);
-    // 计算最优旋转矩阵
-    return u * i * v.transpose();
+    // Python: d = (np.linalg.det(u) * np.linalg.det(vh)) < 0.0
+    // Python: if d: u[:, -1] = -u[:, -1]
+    double det = u.determinant() * vh.determinant();
+    if (det < 0.0) {
+        u.col(2) = -u.col(2);  // Flip the last column of u
+    }
+    
+    // Python: R = np.dot(u, vh)
+    return u * vh;
 }
 
 std::vector<std::array<double, 3>> Align(const std::vector<std::array<double, 3>>& coords,
@@ -56,41 +65,18 @@ std::vector<std::array<double, 3>> Align(const std::vector<std::array<double, 3>
         centered_ref.push_back({centered.x(), centered.y(), centered.z()});
     }
 
-    // 检查coord_subs_var是否已经质心化
-    Vector3d center_subs_var = Vector3d::Zero();
-    for (const auto& point : coord_subs_var) {
-        center_subs_var += Map<const Vector3d>(point.data());
-    }
-    center_subs_var /= coord_subs_var.size();
-    
-    // 如果coord_subs_var已经质心化（质心接近0），则直接使用，否则质心化
-    bool is_centered = (center_subs_var.norm() < 1e-10);
-    
     // Python: R = Kabsch(coord_subs_var, coord_ref)
-    Matrix3d R;
-    if (is_centered) {
-        // coord_subs_var已经质心化，直接使用
-        R = Kabsch(coord_subs_var, centered_ref);
-    } else {
-        // coord_subs_var未质心化，需要质心化后使用
-        std::vector<std::array<double, 3>> centered_subs_var;
-        for (const auto& point : coord_subs_var) {
-            Vector3d centered = Map<const Vector3d>(point.data()) - center_subs_var;
-            centered_subs_var.push_back({centered.x(), centered.y(), centered.z()});
-        }
-        R = Kabsch(centered_subs_var, centered_ref);
-    }
+    // Note: Python version does NOT center coord_subs_var in Align function
+    Matrix3d R = Kabsch(coord_subs_var, centered_ref);
 
     // Python: coords = np.dot(coords, R) + center
+    // This means coords * R, not R * coords!
     std::vector<std::array<double, 3>> aligned_coords;
     for (const auto& point : coords) {
         Vector3d coord_point = Map<const Vector3d>(point.data());
-        if (!is_centered) {
-            // 如果coord_subs_var原本未质心化，需要先减去其质心
-            coord_point -= center_subs_var;
-        }
-        // Python的np.dot(coords, R)等价于R * coords（当coords为列向量时）
-        Vector3d rotated = R * coord_point;
+        // Python's np.dot(coords, R) when coords is a row vector means coords * R
+        // Which is equivalent to R.transpose() * coords when treating coords as column vector
+        Vector3d rotated = R.transpose() * coord_point;
         Vector3d transformed = rotated + center;
         aligned_coords.push_back({transformed.x(), transformed.y(), transformed.z()});
     }
@@ -126,8 +112,8 @@ std::vector<std::array<double, 3>> Align2(const std::vector<std::array<double, 3
         // Python: coords = coords - center
         Vector3d centered = Map<const Vector3d>(point.data()) - center;
         // Python: coords = np.dot(coords, R) + translation
-        // Python的np.dot(coords, R)等价于R * coords（当coords为列向量时）
-        Vector3d rotated = R * centered;
+        // Python's np.dot(coords, R) means coords * R, which is R.transpose() * coords
+        Vector3d rotated = R.transpose() * centered;
         Vector3d transformed = rotated + trans_vec;
         aligned_coords.push_back({transformed.x(), transformed.y(), transformed.z()});
     }
