@@ -51,17 +51,18 @@ conda install librdkit-dev=2025.03.2 -c conda-forge
 
 # Install Boost libraries
 conda install libboost-devel=1.86.0 -c conda-forge
-conda install libboost-headers=1.86.0 -c conda-forge
+#conda install libboost-headers=1.86.0 -c conda-forge
 conda install libboost-python-devel=1.86.0 -c conda-forge  # may be optional
 
 # Install Eigen and CMake
 conda install eigen=3.4.0 -c conda-forge
-conda install cmake -c conda-forge  # ensures cmake >= 3.3, default is 4.0.2
+conda install -c conda-forge gcc_linux-64=12 gxx_linux-64=12 cmake
+conda update -c conda-forge cmake   # ensures cmake >= 3.3, default is 4.0.2
 ```
 
 #### 3. Configure CMakeLists.txt
 
-Before compilation, modify the `CMakeLists.txt` file to set the correct RDKit paths:
+Before compilation, modify the `CMakeLists.txt` file to set the correct RDKit paths if necessary:
 
 ```cmake
 # Set RDKit library path (adjust path to your conda environment)
@@ -74,6 +75,12 @@ set(RDKIT_DIR "/opt/anaconda3/envs/ternify/")
 ```bash
 conda info --envs
 ```
+
+Set library path if necessary for compiling and running ternify afterwards:
+```bash
+export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
+```
+**Note**: Replace `$CONDA_PREFIX` with your actual conda environment path.
 
 #### 4. Compile TERNIFY
 
