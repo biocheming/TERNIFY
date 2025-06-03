@@ -88,10 +88,13 @@ export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
 #### 4. Compile TERNIFY
 
 ```
-# modify the rdkit and rdkit lib path in `CMakeLists.txt`
+# modify the rdkit, rdkit lib, nlopt lib paths in `CMakeLists.txt`
 
-link_directories(/opt/anaconda3/envs/ternify/lib)
-set(RDKIT_DIR "/opt/anaconda3/envs/ternify/")
+# set rdkit, nlopt lib !!!!
+set(CONDA_ENV "/opt/anaconda3/envs/ternify/")
+link_directories(${CONDA_ENV}/lib)
+set(RDKIT_DIR ${CONDA_ENV})
+set(NLOPT_DIR ${CONDA_ENV})
 
 # compile ternify
 conda activate ternify
