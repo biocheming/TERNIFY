@@ -27,6 +27,8 @@
 #include <chrono>
 #include <iomanip>
 
+#include <nlopt.hpp>
+
 
 class Protac {
 public:
@@ -181,7 +183,8 @@ private:
     std::uniform_real_distribution<double> uniform_dist_;
 
     // Powell最小化的辅助函数
-    Solution powell_minimize(const std::vector<double>& initial_guess, RDKit::ROMol* mol_copy, double tol = 0.01);
+    static double functionForNLopt(const std::vector<double>& x, std::vector<double>& grad, void* data);
+    Solution energy_minimize(const std::vector<double>& initial_guess, RDKit::ROMol* mol_copy, double tol = 0.01);
     Solution search_single(const Solution& initial_solution);
 
     //

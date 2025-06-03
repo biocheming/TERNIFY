@@ -1283,12 +1283,19 @@ void Protac::sample(int ntotal, int nsolu, int verbose) {
     search(verbose);
 }
 
-Protac::Solution Protac::powell_minimize(const std::vector<double>& initial_guess, RDKit::ROMol* mol_copy, double tol) {
-    // 参数验证
+// 添加目标函数实现
+double Protac::functionForNLopt(const std::vector<double>& x, std::vector<double>& grad, void* data) {
+    auto* opt_data = static_cast<std::pair<Protac*, RDKit::ROMol*>*>(data);
+    Protac* protac = opt_data->first;
+    RDKit::ROMol* mol_copy = opt_data->second;
+    
+    // 计算能量
+    return protac->thread_safe_score(x, mol_copy);
+}
+
+Protac::Solution Protac::energy_minimize(const std::vector<double>& initial_guess, RDKit::ROMol* mol_copy, double tol) {
     if (initial_guess.size() != rot_dihe_.size()) {
-        throw std::runtime_error("Initial guess size (" + std::to_string(initial_guess.size()) 
-                               + ") does not match number of rotatable dihedrals (" 
-                               + std::to_string(rot_dihe_.size()) + ")");
+        throw std::runtime_error("Initial guess size does not match number of rotatable dihedrals");
     }
 
     Solution current;
@@ -1296,78 +1303,46 @@ Protac::Solution Protac::powell_minimize(const std::vector<double>& initial_gues
     for (double& angle : normalized_guess) {
         angle = normalize_angle(angle);
     }
-    current.dihedrals = normalized_guess;
-    current.parameters = normalized_guess;  // 初始化parameters为normalized_guess
-    auto initial_energy_comp = thread_safe_score_detailed(normalized_guess, mol_copy);
-    current.energy = initial_energy_comp.total_energy;
-    current.energy_components = initial_energy_comp;
+
+    // 设置优化器
+    nlopt::opt optimizer(nlopt::LN_BOBYQA, normalized_guess.size());
     
-    const int max_iter = 100;
-    const int n = initial_guess.size();
+    // 设置目标函数
+    auto opt_data = std::make_pair(this, mol_copy);
+    optimizer.set_min_objective(functionForNLopt, &opt_data);
     
+    // 设置边界条件 (-180 到 180度)
+    std::vector<double> lb(normalized_guess.size(), -180.0);
+    std::vector<double> ub(normalized_guess.size(), 180.0);
+    optimizer.set_lower_bounds(lb);
+    optimizer.set_upper_bounds(ub);
+    
+    // 设置停止条件
+    optimizer.set_xtol_rel(tol);
+    //optimizer.set_ftol_rel(tol);         // 函数值相对收敛容差， for LN_PRAXIS，LN_SBPLX
+    optimizer.set_maxeval(100); // 最大迭代次数
+    
+    // 执行优化
+    double final_energy;
+    std::vector<double> result = normalized_guess;
     try {
-        for (int iter = 0; iter < max_iter; ++iter) {
-            double initial_energy = current.energy;
-            
-            for (int i = 0; i < n; ++i) {
-                const double phi = (1 + std::sqrt(5.0)) / 2;
-                double a = -2.0;
-                double b = 2.0;
-                double best_energy = current.energy;
-                double best_step = 0.0;
-
-                for (int j = 0; j < 10; ++j) {
-                    double x1 = b - (b - a) / phi;
-                    double x2 = a + (b - a) / phi;
-                    x1 = normalize_angle(x1);
-                    x2 = normalize_angle(x2);
-
-                    std::vector<double> guess1 = current.parameters;
-                    std::vector<double> guess2 = current.parameters;
-                    
-                    guess1[i] = normalize_angle(current.parameters[i] + x1);
-                    guess2[i] = normalize_angle(current.parameters[i] + x2);
-                        
-                    for (double& angle : guess1) angle = normalize_angle(angle);
-                    for (double& angle : guess2) angle = normalize_angle(angle);
-                        
-                    double energy1 = thread_safe_score(guess1, mol_copy);
-                    double energy2 = thread_safe_score(guess2, mol_copy);
-
-                    if (energy1 < energy2) {
-                        b = normalize_angle(x2);
-                        if (energy1 < best_energy) {
-                            best_energy = energy1;
-                            best_step = x1;
-                        }
-                    } else {
-                        a = normalize_angle(x1);
-                        if (energy2 < best_energy) {
-                            best_energy = energy2;
-                            best_step = x2;
-                        }
-                    }
-                }
-
-                current.parameters[i] = normalize_angle(current.parameters[i] + best_step);
-                auto updated_energy_comp = thread_safe_score_detailed(current.parameters, mol_copy);
-                current.energy = updated_energy_comp.total_energy;
-                current.energy_components = updated_energy_comp;
-                current.dihedrals = current.parameters;  // 更新dihedrals以保持一致
-            }
-            
-            if (std::abs(initial_energy - current.energy) < tol) {
-                break;
-            }
+        optimizer.optimize(result, final_energy);
+        
+        // 规范化结果
+        for (double& angle : result) {
+            angle = normalize_angle(angle);
         }
+        
+        // 更新Solution对象
+        current.dihedrals = result;
+        current.parameters = result;
+        auto energy_comp = thread_safe_score_detailed(result, mol_copy);
+        current.energy = energy_comp.total_energy;
+        current.energy_components = energy_comp;
+        
     } catch (const std::exception& e) {
-        std::cerr << "Error in powell_minimize: " << e.what() << std::endl;
+        std::cerr << "Error in NLopt optimization: " << e.what() << std::endl;
     }
-    
-    for (double& angle : current.parameters) {
-        angle = normalize_angle(angle);
-    }
-    current.dihedrals = current.parameters;  // 最后确保dihedrals和parameters一致
     
     return current;
 }
@@ -1392,9 +1367,9 @@ Protac::Solution Protac::local_only(const std::vector<double>& dihe, RDKit::ROMo
     current.energy = initial_energy_comp.total_energy;
     current.energy_components = initial_energy_comp;
 
-    // 使用Powell方法进行局部优化
+    // 使用**方法进行局部优化
     try {
-        current = powell_minimize(normalized_dihedrals, mol_copy, 0.01);
+        current = energy_minimize(normalized_dihedrals, mol_copy, 0.01);
         printEnergyComponents(*mol_copy, current.energy);
     } catch (const std::exception& e) {
         std::cerr << "Error in local_only: " << e.what() << std::endl;
@@ -1414,7 +1389,7 @@ Protac::Solution Protac::search_single(const Solution& initial_solution) {
     // 第一阶段：高温搜索
     for (double T : temperatures) {
         alpha *= 0.9;
-        Solution minimized = powell_minimize(best.dihedrals, &mol_copy, 0.01);
+        Solution minimized = energy_minimize(best.dihedrals, &mol_copy, 0.01);
 
         if (minimized.energy < best.energy) {
             best = minimized;
@@ -1463,7 +1438,7 @@ Protac::Solution Protac::search_single(const Solution& initial_solution) {
     
     // 第二阶段：低温精细搜索
     {
-        Solution minimized = powell_minimize(best.dihedrals, &mol_copy, 0.01);
+        Solution minimized = energy_minimize(best.dihedrals, &mol_copy, 0.01);
         if (minimized.energy < best.energy) {
             best = minimized;
         }
@@ -1511,7 +1486,7 @@ Protac::Solution Protac::search_single(const Solution& initial_solution) {
     }
     
     // 最终优化
-    Solution final = powell_minimize(best.dihedrals, &mol_copy, 0.01);
+    Solution final = energy_minimize(best.dihedrals, &mol_copy, 0.01);
     if (final.energy < best.energy) {
         best = final;
     }
