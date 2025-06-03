@@ -1372,6 +1372,37 @@ Protac::Solution Protac::powell_minimize(const std::vector<double>& initial_gues
     return current;
 }
 
+Protac::Solution Protac::local_only(const std::vector<double>& dihe, RDKit::ROMol* mol_copy, int verbose) {
+    // 参数验证
+    if (dihe.size() != rot_dihe_.size()) {
+        throw std::runtime_error("Dihedral angles size (" + std::to_string(dihe.size()) 
+                               + ") does not match number of rotatable dihedrals (" 
+                               + std::to_string(rot_dihe_.size()) + ")");
+    }
+
+    Solution current;
+    std::vector<double> normalized_dihedrals = dihe;
+    for (double& angle : normalized_dihedrals) {
+        angle = normalize_angle(angle);
+    }
+    
+    current.dihedrals = normalized_dihedrals;
+    current.parameters = normalized_dihedrals;  // 初始化parameters为normalized_dihedrals
+    auto initial_energy_comp = thread_safe_score_detailed(normalized_dihedrals, mol_copy);
+    current.energy = initial_energy_comp.total_energy;
+    current.energy_components = initial_energy_comp;
+
+    // 使用Powell方法进行局部优化
+    try {
+        current = powell_minimize(normalized_dihedrals, mol_copy, 0.01);
+        printEnergyComponents(*mol_copy, current.energy);
+    } catch (const std::exception& e) {
+        std::cerr << "Error in local_only: " << e.what() << std::endl;
+    }
+    
+    return current;
+}
+
 Protac::Solution Protac::search_single(const Solution& initial_solution) {
     // Create a copy of the protac molecule once for this search
     RDKit::ROMol mol_copy(*protac_);

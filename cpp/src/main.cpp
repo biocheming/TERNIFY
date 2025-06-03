@@ -107,6 +107,7 @@ void read_parameters(const std::string& filename, Parameters& params) {
             else if (key == "N_processes") params.n_processes = std::stoi(value);
             else if (key == "Verbose") params.verbose = std::stoi(value);
             else if (key == "Score_only") params.score_only = (std::stoi(value) != 0);
+            else if (key == "Local_only") params.local_only = (std::stoi(value) != 0);
         }
     }
 }
@@ -280,9 +281,9 @@ void run_ternify(const Parameters& params) {
                 PROTac.printProtacInfo();
             }
 
-            if (params.score_only) {
+            if (params.score_only || params.local_only) {
                 std::cout << "Score Only Mode Enabled..." << std::endl;
-                double energy = PROTac.score_only(params.verbose);
+                double energy = PROTac.score_only(!params.local_only);
                 std::cout << "Final energy score: " << std::fixed << std::setprecision(3) << energy << " kcal/mol" << std::endl;
                 
                 // 在score_only模式下，我们不需要采样和搜索，但可以输出当前构象
@@ -304,13 +305,24 @@ void run_ternify(const Parameters& params) {
                 RDKit::ROMol mol_copy(*PROTac.getProtac());
                 auto energy_components = PROTac.thread_safe_score_detailed(current_solution.dihedrals, &mol_copy);
                 
-                current_solution.energy = energy_components.total_energy;
-                current_solution.energy_components = energy_components;
+                    current_solution.energy = energy_components.total_energy;
+                    current_solution.energy_components = energy_components;
                 current_solution.parameters = std::vector<double>{};
                 
                 // 清空solutions_并添加当前解
                 PROTac.clearSolutions();
                 PROTac.addSolution(current_solution);
+                if (params.local_only) {
+                    std::cout << "Local Only Mode Enabled..." << std::endl;
+                    auto local_solution = PROTac.local_only(current_solution.dihedrals, &mol_copy);
+                    auto energy_components = PROTac.thread_safe_score_detailed(local_solution.dihedrals, &mol_copy);
+                    local_solution.energy = energy_components.total_energy;
+                    local_solution.energy_components = energy_components;
+                    local_solution.parameters = std::vector<double>{};
+                    PROTac.clearSolutions();
+                    PROTac.addSolution(local_solution);
+                    std::cout << "Final energy score (local): " << std::fixed << std::setprecision(3) << local_solution.energy << " kcal/mol" << std::endl;
+                }
             } else {
                 std::cout << "Sampling and Searching..." << std::endl;
                 PROTac.sample(params.n_ini, params.n_search, params.verbose);
